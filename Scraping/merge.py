@@ -11,7 +11,9 @@ from schema import make_feature_collection
 from sources.osm_source import load_osm_features
 from sources.calgary_closures_source import fetch_closures
 
-OSM_INPUT_PATH = "/mnt/user-data/uploads/calgary_cycling_permissive_fixed.geojson"
+OSM_INPUT_PATH = "/mnt/c/Users/perse/Desktop/escritorio_longterm/" \
+"escribir, drafts/AA 1 GT/Portfolio/Map Calgary/GroundTruthMaps/" \
+"Scraping/Web_Data/calgary_cycling_permissive_fixed.geojson"
 OUTPUT_PATH = "combined.geojson"
 
 
