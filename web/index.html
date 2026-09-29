@@ -1,0 +1,101 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Calgary Cycling Closures Map</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="stylesheet" href="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.css">
+<script src="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.js"></script>
+<style>
+  html, body, #map { height: 100%; margin: 0; }
+  #legend {
+    position: absolute; bottom: 24px; left: 12px; z-index: 1;
+    background: rgba(255,255,255,0.92); padding: 10px 14px;
+    border-radius: 8px; font: 13px/1.5 system-ui, sans-serif; color: #1a1a1a;
+    box-shadow: 0 1px 4px rgba(0,0,0,0.25);
+  }
+  #legend div { display: flex; align-items: center; gap: 8px; margin: 3px 0; }
+  #legend .swatch { width: 16px; height: 4px; border-radius: 2px; }
+  .maplibregl-popup-content { font: 13px/1.5 system-ui, sans-serif; }
+</style>
+</head>
+<body>
+<div id="map"></div>
+<div id="legend">
+  <div><span class="swatch" style="background:#7a8ca5"></span> Cycling network</div>
+  <div><span class="swatch" style="background:#e11d48"></span> Closed now</div>
+  <div><span class="swatch" style="background:#e11d48;opacity:0.35"></span> Closed (upcoming)</div>
+  <div><span class="swatch" style="background:#16a34a"></span> Detour</div>
+</div>
+<script>
+const map = new maplibregl.Map({
+  container: 'map',
+  style: 'https://tiles.openfreemap.org/styles/liberty',
+  center: [-114.0719, 51.0447],
+  zoom: 11
+});
+
+map.on('load', async () => {
+  const [networkResp, closuresResp] = await Promise.all([
+    fetch('data/network.geojson'),
+    fetch('data/closures.geojson')
+  ]);
+  const network = await networkResp.json();
+  const closures = await closuresResp.json();
+
+  map.addSource('network', { type: 'geojson', data: network });
+  map.addSource('closures', { type: 'geojson', data: closures });
+
+  map.addLayer({
+    id: 'network-line',
+    type: 'line',
+    source: 'network',
+    paint: { 'line-color': '#7a8ca5', 'line-width': 1.5, 'line-opacity': 0.6 }
+  });
+
+  // Closed, currently in effect — solid red
+  map.addLayer({
+    id: 'closures-current',
+    type: 'line',
+    source: 'closures',
+    filter: ['all', ['==', ['get', 'status'], 'closed'], ['==', ['get', 'calgary_temporal_status'], 'CURRENT']],
+    paint: { 'line-color': '#e11d48', 'line-width': 4 }
+  });
+
+  // Closed, upcoming — muted/dashed red
+  map.addLayer({
+    id: 'closures-future',
+    type: 'line',
+    source: 'closures',
+    filter: ['all', ['==', ['get', 'status'], 'closed'], ['==', ['get', 'calgary_temporal_status'], 'FUTURE']],
+    paint: { 'line-color': '#e11d48', 'line-width': 4, 'line-opacity': 0.4, 'line-dasharray': [2, 2] }
+  });
+
+  // Detours — green
+  map.addLayer({
+    id: 'closures-detour',
+    type: 'line',
+    source: 'closures',
+    filter: ['==', ['get', 'status'], 'detour'],
+    paint: { 'line-color': '#16a34a', 'line-width': 4 }
+  });
+
+  // Shared popup for any closure layer
+  ['closures-current', 'closures-future', 'closures-detour'].forEach(layerId => {
+    map.on('click', layerId, (e) => {
+      const p = e.features[0].properties;
+      const when = p.calgary_temporal_status === 'FUTURE'
+        ? `Starts ${p.start_date || 'date TBD'}`
+        : `Since ${p.start_date || 'unknown'}${p.end_date ? ' — expected until ' + p.end_date : ''}`;
+      new maplibregl.Popup()
+        .setLngLat(e.lngLat)
+        .setHTML(`<strong>${p.status === 'detour' ? 'Detour' : 'Closed'}</strong><br>${p.detour_note || ''}<br><em>${when}</em>`)
+        .addTo(map);
+    });
+    map.on('mouseenter', layerId, () => map.getCanvas().style.cursor = 'pointer');
+    map.on('mouseleave', layerId, () => map.getCanvas().style.cursor = '');
+  });
+});
+</script>
+</body>
+</html>
