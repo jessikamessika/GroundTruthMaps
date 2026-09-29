@@ -74,7 +74,7 @@ def run():
     osm, closures = [], []
 
     try:
-        osm = load_osm_features(OSM_INPUT_PATH)
+        osm = load_osm_features(str(OSM_INPUT_PATH))
     except Exception as e:
         print(f"[merge] OSM source crashed unexpectedly: {e}")
 
