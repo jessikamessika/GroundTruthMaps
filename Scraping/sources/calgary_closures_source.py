@@ -77,6 +77,9 @@ def fetch_closures() -> list[dict]:
     for raw_feature in raw.get("features", []):
         try:
             props = raw_feature.get("properties", {})
+            temporal_status = props.get("STATUS")
+            if temporal_status == "PAST":
+                continue  # expired closures aren't relevant to the map
             note_parts = [p for p in (props.get("NAME"), props.get("PURPOSE")) if p]
             normalized.append(
                 make_feature(
@@ -86,10 +89,10 @@ def fetch_closures() -> list[dict]:
                     start_date=_epoch_ms_to_iso(props.get("START_DATE")),
                     end_date=_epoch_ms_to_iso(props.get("END_DATE")),
                     detour_note=" — ".join(note_parts) if note_parts else None,
-                    # STATUS is temporal (CURRENT/FUTURE/etc), not part of
-                    # the open/closed schema — kept as raw context so you
-                    # can filter on it downstream if needed.
-                    extra_properties={"calgary_temporal_status": props.get("STATUS")},
+                    # STATUS is temporal (CURRENT/FUTURE), not part of the
+                    # open/closed schema — kept as raw context so the map
+                    # can style FUTURE closures differently (muted).
+                    extra_properties={"calgary_temporal_status": temporal_status},
                 )
             )
         except (KeyError, ValueError):
