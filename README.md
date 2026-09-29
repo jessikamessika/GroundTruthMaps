@@ -1,2 +1,2 @@
 # GroundTruthMaps
-Creating an updated cycling &amp; pedestrian map of Calgary.
+Creating an automated, accessible map of Calgary for cyclists and pedestrians.
