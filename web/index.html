@@ -40,10 +40,38 @@ const map = new maplibregl.Map({
   }
 });
 
+// Build a popup DOM tree without innerHTML — closure text comes from an
+// external feed (City ArcGIS `CLOSURE_DETOUR` etc.), so it must not be
+// interpreted as markup.
+function buildClosurePopup(props) {
+  const when = props.calgary_temporal_status === 'FUTURE'
+    ? `Starts ${props.start_date || 'date TBD'}`
+    : `Since ${props.start_date || 'unknown'}${props.end_date ? ' — expected until ' + props.end_date : ''}`;
+
+  const root = document.createElement('div');
+
+  const heading = document.createElement('strong');
+  heading.textContent = props.status === 'detour' ? 'Detour' : 'Closed';
+  root.appendChild(heading);
+
+  root.appendChild(document.createElement('br'));
+
+  if (props.detour_note) {
+    root.appendChild(document.createTextNode(props.detour_note));
+    root.appendChild(document.createElement('br'));
+  }
+
+  const em = document.createElement('em');
+  em.textContent = when;
+  root.appendChild(em);
+
+  return root;
+}
+
 map.on('load', async () => {
   const [networkResp, closuresResp] = await Promise.all([
-    fetch('data/network.geojson'),
-    fetch('data/closures.geojson')
+    fetch('../data/network.geojson'),
+    fetch('../data/closures.geojson')
   ]);
   const network = await networkResp.json();
   const closures = await closuresResp.json();
@@ -88,13 +116,9 @@ map.on('load', async () => {
   // Shared popup for any closure layer
   ['closures-current', 'closures-future', 'closures-detour'].forEach(layerId => {
     map.on('click', layerId, (e) => {
-      const p = e.features[0].properties;
-      const when = p.calgary_temporal_status === 'FUTURE'
-        ? `Starts ${p.start_date || 'date TBD'}`
-        : `Since ${p.start_date || 'unknown'}${p.end_date ? ' — expected until ' + p.end_date : ''}`;
       new maplibregl.Popup()
         .setLngLat(e.lngLat)
-        .setHTML(`<strong>${p.status === 'detour' ? 'Detour' : 'Closed'}</strong><br>${p.detour_note || ''}<br><em>${when}</em>`)
+        .setDOMContent(buildClosurePopup(e.features[0].properties))
         .addTo(map);
     });
     map.on('mouseenter', layerId, () => map.getCanvas().style.cursor = 'pointer');

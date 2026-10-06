@@ -10,6 +10,8 @@ instead of crashing the run), drops expired closures, and writes:
 """
 # to clear cache of combined.geojson:
 # git rm --cached data/combined.geojson
+# to open html local:
+# python3 -m http.server 8000
 
 import json
 from datetime import date
