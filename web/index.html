@@ -32,7 +32,12 @@ const map = new maplibregl.Map({
   container: 'map',
   style: 'https://tiles.openfreemap.org/styles/liberty',
   center: [-114.0719, 51.0447],
-  zoom: 11
+  zoom: 11,
+  attributionControl: {
+    customAttribution:
+      '© OpenStreetMap contributors (ODbL) · ' +
+      'City of Calgary Open Data (Open Government Licence - Calgary)'
+  }
 });
 
 map.on('load', async () => {

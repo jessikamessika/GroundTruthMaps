@@ -17,7 +17,7 @@ from schema import make_feature_collection
 from sources.osm_source import load_osm_features
 from sources.calgary_closures_source import fetch_closures
 
-OSM_INPUT_PATH = Path(__file__).resolve().parent / "Web_Data/calgary_cycling_permissive_fixed.geojson"
+OSM_INPUT_PATH = Path(__file__).resolve().parent / "inputs/calgary_cycling_permissive_fixed.geojson"
 "/mnt/user-data/uploads/"  # keep YOUR path here
 DATA_DIR = Path(__file__).resolve().parent.parent / "data"
 
