@@ -3,30 +3,111 @@
 <head>
 <meta charset="utf-8">
 <title>Calgary Cycling Closures Map</title>
-<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#1a1a1a">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="icon-192.png">
+<link rel="apple-touch-icon" href="icon-192.png">
 <link rel="stylesheet" href="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.css">
 <script src="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.js"></script>
 <style>
-  html, body, #map { height: 100%; margin: 0; }
-  #legend {
-    position: absolute; bottom: 24px; left: 12px; z-index: 1;
-    background: rgba(255,255,255,0.92); padding: 10px 14px;
-    border-radius: 8px; font: 13px/1.5 system-ui, sans-serif; color: #1a1a1a;
+  html, body { margin: 0; height: 100%; overflow: hidden; }
+  #map { position: absolute; inset: 0; }
+
+  /* Legend + layer toggles (bottom sheet, collapsible) */
+  #panel {
+    position: absolute; z-index: 2;
+    left: 8px; right: 8px;
+    bottom: calc(30px + env(safe-area-inset-bottom));
+    max-width: 420px;
+    background: rgba(255,255,255,0.96); color: #1a1a1a;
+    border-radius: 12px; box-shadow: 0 1px 6px rgba(0,0,0,0.3);
+    font: 14px/1.4 system-ui, sans-serif;
+  }
+  #panel-toggle {
+    width: 100%; box-sizing: border-box; min-height: 44px;
+    padding: 0 14px; border: 0; background: none; color: inherit;
+    font: inherit; font-weight: 600; text-align: left; cursor: pointer;
+    display: flex; align-items: center; justify-content: space-between;
+  }
+  #panel-body { padding: 0 14px 8px; }
+  #panel.collapsed #panel-body { display: none; }
+  #panel-toggle .chev { transition: transform .15s; }
+  #panel.collapsed #panel-toggle .chev { transform: rotate(180deg); }
+
+  .row {
+    display: flex; align-items: center; gap: 10px;
+    min-height: 40px; cursor: pointer;
+  }
+  .row.static { cursor: default; }
+  .row input { width: 20px; height: 20px; margin: 0; flex: none; }
+  .row .spacer { width: 20px; flex: none; }
+  .swatch { width: 22px; height: 4px; border-radius: 2px; flex: none; }
+
+  /* Freshness pill */
+  #updated {
+    position: absolute; z-index: 2; left: 8px;
+    top: calc(8px + env(safe-area-inset-top));
+    background: rgba(255,255,255,0.96); color: #1a1a1a;
+    padding: 6px 10px; border-radius: 999px;
+    font: 12px/1.2 system-ui, sans-serif;
     box-shadow: 0 1px 4px rgba(0,0,0,0.25);
   }
-  #legend div { display: flex; align-items: center; gap: 8px; margin: 3px 0; }
-  #legend .swatch { width: 16px; height: 4px; border-radius: 2px; }
-  .maplibregl-popup-content { font: 13px/1.5 system-ui, sans-serif; }
+  #updated:empty { display: none; }
+
+  /* Load-failure banner */
+  #error {
+    position: absolute; z-index: 3; left: 8px; right: 8px;
+    top: calc(44px + env(safe-area-inset-top));
+    background: #fef2f2; color: #7f1d1d; border: 1px solid #fecaca;
+    padding: 10px 12px; border-radius: 8px;
+    font: 14px/1.4 system-ui, sans-serif;
+  }
+  #error:empty { display: none; }
+
+  .maplibregl-popup-content {
+    font: 14px/1.5 system-ui, sans-serif; max-width: 240px;
+    padding: 12px 28px 12px 12px;
+  }
+  .maplibregl-popup-close-button { font-size: 22px; width: 32px; height: 32px; }
+  .maplibregl-ctrl-top-right { top: env(safe-area-inset-top); }
 </style>
 </head>
 <body>
 <div id="map"></div>
-<div id="legend">
-  <div><span class="swatch" style="background:#7a8ca5"></span> Cycling network</div>
-  <div><span class="swatch" style="background:#e11d48"></span> Closed now</div>
-  <div><span class="swatch" style="background:#e11d48;opacity:0.35"></span> Closed (upcoming)</div>
-  <div><span class="swatch" style="background:#16a34a"></span> Detour</div>
+<div id="updated"></div>
+<div id="error" role="alert"></div>
+
+<div id="panel">
+  <button id="panel-toggle" aria-expanded="true">
+    <span>Legend and layers</span><span class="chev">▾</span>
+  </button>
+  <div id="panel-body">
+    <div class="row static">
+      <span class="spacer"></span>
+      <span class="swatch" style="background:#7a8ca5"></span> Cycling network
+    </div>
+    <label class="row">
+      <input type="checkbox" id="t-unconfirmed" checked>
+      <span class="swatch" style="background:#7a8ca5;opacity:0.5"></span> Unconfirmed paths
+    </label>
+    <div class="row static">
+      <span class="spacer"></span>
+      <span class="swatch" style="background:#e11d48"></span> Closed now
+    </div>
+    <label class="row">
+      <input type="checkbox" id="t-future" checked>
+      <span class="swatch" style="background:#e11d48;opacity:0.35"></span> Closed (upcoming)
+    </label>
+    <label class="row">
+      <input type="checkbox" id="t-detour" checked>
+      <span class="swatch" style="background:#16a34a"></span> Detour
+    </label>
+  </div>
 </div>
+
 <script>
 const map = new maplibregl.Map({
   container: 'map',
@@ -34,11 +115,30 @@ const map = new maplibregl.Map({
   center: [-114.0719, 51.0447],
   zoom: 11,
   attributionControl: {
+    compact: true,
     customAttribution:
       '© OpenStreetMap contributors (ODbL) · ' +
       'City of Calgary Open Data (Open Government Licence - Calgary)'
   }
 });
+
+map.addControl(new maplibregl.NavigationControl({ showCompass: false }), 'top-right');
+map.addControl(new maplibregl.GeolocateControl({
+  positionOptions: { enableHighAccuracy: true },
+  trackUserLocation: true,
+  showUserLocation: true
+}), 'top-right');
+
+// Collapsible panel; start collapsed on small screens so the map is visible.
+const panel = document.getElementById('panel');
+const panelToggle = document.getElementById('panel-toggle');
+function setCollapsed(c) {
+  panel.classList.toggle('collapsed', c);
+  panelToggle.setAttribute('aria-expanded', String(!c));
+}
+panelToggle.addEventListener('click', () =>
+  setCollapsed(!panel.classList.contains('collapsed')));
+if (window.matchMedia('(max-width: 600px)').matches) setCollapsed(true);
 
 // Build a popup DOM tree without innerHTML — closure text comes from an
 // external feed (City ArcGIS `CLOSURE_DETOUR` etc.), so it must not be
@@ -68,22 +168,64 @@ function buildClosurePopup(props) {
   return root;
 }
 
+function showError(msg) {
+  document.getElementById('error').textContent = msg;
+}
+
+function showUpdated(generated) {
+  const d = new Date(generated);
+  if (!generated || isNaN(d)) return;   // no date, no pill — don't guess
+  const label = d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+  document.getElementById('updated').textContent = `Closures updated ${label}`;
+}
+
+// Wire a checkbox to one or more layers' visibility.
+function wireToggle(checkboxId, layerIds) {
+  document.getElementById(checkboxId).addEventListener('change', (e) => {
+    const v = e.target.checked ? 'visible' : 'none';
+    layerIds.forEach(id => map.setLayoutProperty(id, 'visibility', v));
+  });
+}
+
+const CLOSURE_LAYERS = ['closures-current', 'closures-future', 'closures-detour'];
+
 map.on('load', async () => {
-  const [networkResp, closuresResp] = await Promise.all([
-    fetch('../data/network.geojson'),
-    fetch('../data/closures.geojson')
-  ]);
-  const network = await networkResp.json();
-  const closures = await closuresResp.json();
+  let network, closures;
+  try {
+    const [networkResp, closuresResp] = await Promise.all([
+      fetch('../data/network.geojson'),
+      fetch('../data/closures.geojson')
+    ]);
+    if (!networkResp.ok || !closuresResp.ok) throw new Error('HTTP error');
+    network = await networkResp.json();
+    closures = await closuresResp.json();
+  } catch (err) {
+    console.error(err);
+    showError('Could not load map data. Check your connection and reload.');
+    return;
+  }
+
+  showUpdated(closures.generated);
 
   map.addSource('network', { type: 'geojson', data: network });
   map.addSource('closures', { type: 'geojson', data: closures });
 
+  // Confirmed cycling network (bicycle_access = designated)
   map.addLayer({
-    id: 'network-line',
+    id: 'network-confirmed',
     type: 'line',
     source: 'network',
-    paint: { 'line-color': '#7a8ca5', 'line-width': 1.5, 'line-opacity': 0.6 }
+    filter: ['==', ['get', 'bicycle_access'], 'designated'],
+    paint: { 'line-color': '#7a8ca5', 'line-width': 1.5, 'line-opacity': 0.7 }
+  });
+
+  // Unconfirmed paths (yes / permissive / unknown) — fainter, so confidence is visible
+  map.addLayer({
+    id: 'network-unconfirmed',
+    type: 'line',
+    source: 'network',
+    filter: ['!=', ['get', 'bicycle_access'], 'designated'],
+    paint: { 'line-color': '#7a8ca5', 'line-width': 1.2, 'line-opacity': 0.4 }
   });
 
   // Closed, currently in effect — solid red
@@ -113,16 +255,32 @@ map.on('load', async () => {
     paint: { 'line-color': '#16a34a', 'line-width': 4 }
   });
 
-  // Shared popup for any closure layer
-  ['closures-current', 'closures-future', 'closures-detour'].forEach(layerId => {
-    map.on('click', layerId, (e) => {
-      new maplibregl.Popup()
-        .setLngLat(e.lngLat)
-        .setDOMContent(buildClosurePopup(e.features[0].properties))
-        .addTo(map);
-    });
-    map.on('mouseenter', layerId, () => map.getCanvas().style.cursor = 'pointer');
-    map.on('mouseleave', layerId, () => map.getCanvas().style.cursor = '');
+  wireToggle('t-unconfirmed', ['network-unconfirmed']);
+  wireToggle('t-future', ['closures-future']);
+  wireToggle('t-detour', ['closures-detour']);
+
+  // Fat-finger tolerance: query a box around the tap instead of a single
+  // pixel, since closure lines are thin. Only visible layers return features.
+  const HIT = 14;
+  function closuresNear(point) {
+    return map.queryRenderedFeatures(
+      [[point.x - HIT, point.y - HIT], [point.x + HIT, point.y + HIT]],
+      { layers: CLOSURE_LAYERS }
+    );
+  }
+
+  map.on('click', (e) => {
+    const hits = closuresNear(e.point);
+    if (!hits.length) return;
+    new maplibregl.Popup({ maxWidth: '240px' })
+      .setLngLat(e.lngLat)
+      .setDOMContent(buildClosurePopup(hits[0].properties))
+      .addTo(map);
+  });
+
+  // Pointer cursor on desktop (no-op on touch)
+  map.on('mousemove', (e) => {
+    map.getCanvas().style.cursor = closuresNear(e.point).length ? 'pointer' : '';
   });
 });
 </script>
