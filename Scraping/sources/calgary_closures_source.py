@@ -36,6 +36,7 @@ CLOSURES_ENDPOINT = (
     "https://services1.arcgis.com/AVP60cs0Q9PEA8rH/ArcGIS/rest/services/"
     "Current_Pathway_Closures/FeatureServer/0/query"
 )
+# CLOSURES_ENDPOINT = ("http://localhost:1/nope") # for testing guardrail, simulates bad connection
 
 
 def _epoch_ms_to_iso(value) -> str | None:
