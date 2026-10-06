@@ -19,6 +19,14 @@ Two responsibilities live here, in this order:
 OSM gives you the NETWORK, not closures — so every surviving feature starts
 as status="open". Closures get merged in later from the Calgary open data
 source.
+
+Contract for load_osm_features():
+  - Returns a list of normalized features.
+  - Returns [] ONLY when the file loaded successfully and genuinely
+    contained zero features.
+  - RAISES on file-not-found, JSON parse failure, or any other read
+    error. Callers decide what to do; this function does not swallow
+    failures into an ambiguous [].
 """
 
 import json
@@ -64,7 +72,6 @@ def _polygon_geom_to_lines(geom: dict) -> dict:
         return geom
 
     if gtype == "Polygon":
-        # coordinates: [ring1, ring2, ...] where ring1 is exterior.
         rings = geom["coordinates"]
         lines = [_ring_to_linestring_coords(r) for r in rings]
         if len(lines) == 1:
@@ -72,8 +79,6 @@ def _polygon_geom_to_lines(geom: dict) -> dict:
         return {"type": "MultiLineString", "coordinates": lines}
 
     if gtype == "MultiPolygon":
-        # coordinates: [polygon1, polygon2, ...] where each polygon is
-        # [ring1, ring2, ...]. Flatten every ring across every polygon.
         lines = [
             _ring_to_linestring_coords(ring)
             for polygon in geom["coordinates"]
@@ -160,15 +165,13 @@ def _bicycle_access_from_tags(props: dict) -> str:
 def load_osm_features(geojson_path: str) -> list[dict]:
     """Load and normalize OSM features.
 
-    Returns [] and prints a warning on failure rather than raising, so one
-    bad file doesn't kill the whole pipeline run.
+    Raises on file-not-found or malformed JSON — the caller is responsible
+    for deciding whether a failed load should overwrite existing data (it
+    should not). Returns [] only for a successful load that contained zero
+    features.
     """
-    try:
-        with open(geojson_path, "r") as f:
-            data = json.load(f)
-    except (FileNotFoundError, json.JSONDecodeError) as e:
-        print(f"[osm_source] FAILED to load {geojson_path}: {e}")
-        return []
+    with open(geojson_path, "r") as f:
+        data = json.load(f)
 
     data, geom_stats = _fix_closed_loop_geometry(data)
     if geom_stats["Polygon"] or geom_stats["MultiPolygon"]:
@@ -213,11 +216,6 @@ def load_osm_features(geojson_path: str) -> list[dict]:
 
 
 if __name__ == "__main__":
-    # Quick manual test: run this file directly to sanity-check the source
-    # in isolation, without needing the full merge pipeline.
-    #
-    #   python3 osm_source.py path/to/calgary_cycling_permissive.geojson
-    #
     if len(sys.argv) != 2:
         print(f"usage: {sys.argv[0]} <geojson_path>", file=sys.stderr)
         sys.exit(2)
