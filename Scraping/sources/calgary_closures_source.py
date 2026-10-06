@@ -10,6 +10,13 @@ Real fields on this layer (from the service's own schema):
   NAME, CLOSURE_DETOUR, PURPOSE, STATUS, START_DATE, END_DATE,
   PUBLIC_VIEW, CREATED_DT, MODIFIED_DT, GLOBALID
 
+Contract for fetch_closures():
+  - Returns a list of normalized features.
+  - Returns [] ONLY when the fetch succeeded and the feed genuinely
+    contains zero closures.
+  - RAISES on network/HTTP/JSON failure. Callers decide what to do;
+    this function does not swallow failures into an ambiguous [].
+
 IMPORTANT — verify before trusting this in production:
   Esri date fields come back as Unix epoch milliseconds, not strings —
   handled below. But the actual STRING VALUES inside STATUS and
@@ -59,19 +66,22 @@ def _map_status(closure_detour: str | None) -> str:
 
 
 def fetch_closures() -> list[dict]:
-    try:
-        import requests
+    """Fetch and normalize current + future pathway closures.
 
-        resp = requests.get(
-            CLOSURES_ENDPOINT,
-            params={"where": "1=1", "outFields": "*", "f": "geojson"},
-            timeout=30,
-        )
-        resp.raise_for_status()
-        raw = resp.json()
-    except Exception as e:
-        print(f"[calgary_closures_source] FAILED to fetch: {e}")
-        return []
+    Raises on any network, HTTP, or JSON error — the caller is
+    responsible for deciding whether a failed fetch should overwrite
+    existing data (it should not). Returns [] only for a genuine
+    successful fetch that contained zero features.
+    """
+    import requests
+
+    resp = requests.get(
+        CLOSURES_ENDPOINT,
+        params={"where": "1=1", "outFields": "*", "f": "geojson"},
+        timeout=30,
+    )
+    resp.raise_for_status()
+    raw = resp.json()
 
     normalized = []
     for raw_feature in raw.get("features", []):
@@ -104,7 +114,8 @@ def fetch_closures() -> list[dict]:
 
 if __name__ == "__main__":
     # Run this directly first to eyeball 2-3 RAW records before trusting
-    # the mapping above.
+    # the mapping above. This intentionally does NOT catch network errors —
+    # if the endpoint is unreachable, you want to see the traceback.
     import requests
 
     resp = requests.get(
