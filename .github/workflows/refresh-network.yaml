@@ -1,0 +1,59 @@
+name: Refresh OSM network (full merge)
+
+on:
+  schedule:
+    # Weekly, Monday 06:15 UTC (Sunday 23:15 Calgary time in summer).
+    # The OSM network changes slowly; weekly is plenty. Adjust the day/hour
+    # to taste.
+    - cron: "15 6 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: refresh-network
+  cancel-in-progress: false
+
+jobs:
+  merge:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: pip install requests
+
+      - name: Run full merge pipeline
+        # Requires inputs/calgary_cycling_permissive.geojson to be present
+        # in the repo. That file is large; confirm it's committed (not
+        # gitignored) or this step will fail.
+        run: python3 Scraping/merge.py
+
+      - name: Run doctor preflight
+        run: python3 doctor.py
+
+      - name: Commit and push if network or closures changed
+        run: |
+          set -euo pipefail
+
+          # network.geojson is the point of this workflow; closures.geojson
+          # can also move because merge.py rewrites it from the same feed.
+          # combined.geojson is gitignored and never committed.
+          if git diff --quiet data/network.geojson data/closures.geojson; then
+            echo "No change in network.geojson or closures.geojson; nothing to commit."
+            exit 0
+          fi
+
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add data/network.geojson data/closures.geojson
+          git commit -m "Refresh OSM network + closures ($(date -u +%Y-%m-%dT%H:%MZ))"
+          git push
