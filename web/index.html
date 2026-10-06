@@ -257,8 +257,17 @@ map.on('load', async () => {
   wireToggle('t-current', ['closures-current']);
   wireToggle('t-future', ['closures-future']);
   wireToggle('t-detour', ['closures-detour']);
-  const applyNetwork = wireToggle('t-network', ['network-confirmed']);
-  const applyUnconfirmed = wireToggle('t-unconfirmed', ['network-unconfirmed']);
+  const tNetwork = document.getElementById('t-network');
+  const tUnconfirmed = document.getElementById('t-unconfirmed');
+
+  function updateNetworkVis() {
+    const net = tNetwork.checked;
+    setVis(['network-confirmed'], net);
+    setVis(['network-unconfirmed'], net && tUnconfirmed.checked);
+    tUnconfirmed.disabled = !net;   // greyed out when the whole network is hidden
+  }
+  tNetwork.addEventListener('change', updateNetworkVis);
+  tUnconfirmed.addEventListener('change', updateNetworkVis);
 
   // Fat-finger tolerance: query a box around the tap instead of a single
   // pixel, since closure lines are thin. Only visible layers return features.
@@ -322,8 +331,7 @@ map.on('load', async () => {
     map.addLayer({ id: 'network-unconfirmed', type: 'line', source: 'network',
       filter: ['!=', ['get', 'bicycle_access'], 'designated'],
       paint: { 'line-color': '#7a8ca5', 'line-width': 1.2, 'line-opacity': 0.4 } }, 'closures-current');
-    applyNetwork(); applyUnconfirmed();   // honor checkboxes toggled while loading
-  } catch (err) {
+    updateNetworkVis();   // honor checkboxes toggled while loading  } catch (err) {
     console.error(err);
     showError('Closures loaded, but the cycling network could not be loaded.');
   } finally {
