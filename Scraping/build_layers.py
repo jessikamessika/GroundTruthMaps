@@ -13,7 +13,7 @@ ready to write. Validation happened earlier, in schema.py.
 """
 
 import json
-from datetime import date
+from datetime import datetime, timezone
 from pathlib import Path
 
 from schema import make_feature_collection
@@ -68,7 +68,7 @@ def build_network_layer(osm_features: list[dict]) -> dict:
 
 def build_closures_layer(closures: list[dict]) -> dict:
     layer = make_feature_collection([_slim(f, CLOSURE_KEEP) for f in closures])
-    layer["generated"] = date.today().isoformat()  # GeoJSON allows extra top-level members
+    layer["generated"] = datetime.now(timezone.utc).isoformat(timespec="seconds")  # GeoJSON allows extra top-level members
     return layer
 
 

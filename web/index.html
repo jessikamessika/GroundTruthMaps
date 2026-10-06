@@ -55,6 +55,7 @@
     font: 12px/1.2 system-ui, sans-serif;
     box-shadow: 0 1px 4px rgba(0,0,0,0.25);
   }
+  #updated.stale { background: #fef3c7; color: #78350f; }
   #updated:empty { display: none; }
 
   /* Load-failure banner */
@@ -174,9 +175,29 @@ function showError(msg) {
 
 function showUpdated(generated) {
   const d = new Date(generated);
-  if (!generated || isNaN(d)) return;   // no date, no pill — don't guess
-  const label = d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
-  document.getElementById('updated').textContent = `Closures updated ${label}`;
+  if (!generated || isNaN(d)) return;   // no valid date, no pill
+  const el = document.getElementById('updated');
+  const hasTime = /T\d{2}:\d{2}/.test(generated);
+
+  function render() {
+    if (!hasTime) {   // old date-only format: don't fake precision
+      el.textContent = 'Closures updated ' +
+        d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+      return;
+    }
+    const mins = Math.max(0, Math.round((Date.now() - d) / 60000));
+    let ago;
+    if (mins < 1) ago = 'just now';
+    else if (mins < 60) ago = `${mins} min ago`;
+    else if (mins < 48 * 60) {
+      const h = Math.round(mins / 60);
+      ago = `${h} hour${h === 1 ? '' : 's'} ago`;
+    } else ago = `${Math.round(mins / 1440)} days ago`;
+    el.textContent = `Closures updated ${ago}`;
+    el.classList.toggle('stale', mins > 6 * 60);
+  }
+  render();
+  setInterval(render, 60000);
 }
 
 // Wire a checkbox to one or more layers' visibility.
