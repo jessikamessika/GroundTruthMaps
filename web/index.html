@@ -289,6 +289,10 @@ function wireToggle(checkboxId, layerIds) {
 
 const CLOSURE_LAYERS = ['closures-current', 'closures-future', 'closures-detour'];
 
+let planMode = false, pts = [], markers = [];
+let closuresData = null;   // set once closures load
+let generatedAt = null;    // the `generated` timestamp
+
 map.on('load', async () => {
   const loading = document.getElementById('loading');
 
@@ -298,6 +302,8 @@ map.on('load', async () => {
     if (!r.ok) throw new Error('closures HTTP ' + r.status);
     const closures = await r.json();
     showUpdated(closures.generated);
+    closuresData = closures;
+    generatedAt = closures.generated;
     map.addSource('closures', { type: 'geojson', data: closures });
   } catch (err) {
     console.error(err);
@@ -401,16 +407,15 @@ map.on('load', async () => {
   } finally {
     loading.hidden = true;
   }
-
-  let planMode = false, pts = [], markers = [];
-
+  // try{
+  // routing starts
   map.addSource('route', { type: 'geojson', data: { type: 'FeatureCollection', features: [] } });
   map.addSource('route-hits', { type: 'geojson', data: { type: 'FeatureCollection', features: [] } });
   map.addLayer({ id: 'route-line', type: 'line', source: 'route',
     paint: { 'line-color': '#1a73e8', 'line-width': 5, 'line-opacity': 0.85 } });
   map.addLayer({ id: 'route-hits', type: 'line', source: 'route-hits',
     paint: { 'line-color': ['case', ['get', 'lapsed'], '#f29900', '#d93025'],
-             'line-width': 9, 'line-opacity': 0.9 } });
+            'line-width': 9, 'line-opacity': 0.9 } });
 
   const banner = document.getElementById('route-banner');   // add a <div> in the HTML
 
@@ -473,9 +478,13 @@ map.on('load', async () => {
       // ===== NEW BLOCK ENDS HERE =====
 
     } catch (err) {
-      banner.textContent = 'Couldn\'t get a route. Try again.';
+      console.error('Routing error:', err);
+      banner.textContent = `Couldn't get a route (${err.message}). Try again.`;
     }
   });
+  // } catch (err) {
+  // console.error('Routing init failed; map still works', err);
+  // }
 
 });
 </script>

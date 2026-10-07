@@ -1,4 +1,5 @@
 // web/routing.js — plain ORS route + closure crossing check
+const PROXY_URL = 'https://ors-proxy.jess-jm-zhang.workers.dev';
 const CLOSURE_BUFFER_M = 15;
 const BLOCKING = new Set(['closed']);   // 'detour' = passable via posted detour; 'reduced' = passable
 
@@ -41,12 +42,16 @@ function routeCrossesClosures(route, closures) {
 }
 
 async function fetchPlainRoute(start, end) {   // [lng, lat] each
-  const r = await fetch(ORS_URL, {
+  const r = await fetch(PROXY_URL, {
     method: 'POST',
-    headers: { 'Authorization': ORS_KEY, 'Content-Type': 'application/json' },
-    body: JSON.stringify({ coordinates: [start, end], radiuses: [500, 500] }),
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ coordinates: [start, end] }),
   });
-  if (!r.ok) throw new Error(`ORS ${r.status}`);
+  if (!r.ok) {
+    let detail = '';
+    try { detail = (await r.json()).error?.message || ''; } catch (_) {}
+    throw new Error(`Route service ${r.status} ${detail}`.trim());
+  }
   const fc = await r.json();
   if (!fc.features?.length) throw new Error('No route found');
   return fc.features[0];
