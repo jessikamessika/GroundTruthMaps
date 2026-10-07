@@ -85,6 +85,27 @@
   }
   .maplibregl-popup-close-button { font-size: 22px; width: 32px; height: 32px; }
   .maplibregl-ctrl-top-right { top: env(safe-area-inset-top); }
+
+  /* First-visit welcome popup */
+    #welcome {
+    position: absolute; inset: 0; z-index: 10;
+    display: flex; align-items: center; justify-content: center;
+    padding: 16px; box-sizing: border-box;
+    background: rgba(0,0,0,0.45);
+  }
+  #welcome[hidden] { display: none; }
+  #welcome .card {
+    max-width: 340px; background: #fff; color: #1a1a1a;
+    border-radius: 14px; padding: 20px;
+    box-shadow: 0 4px 20px rgba(0,0,0,0.35);
+    font: 15px/1.5 system-ui, sans-serif;
+  }
+  #welcome h2 { margin: 0 0 8px; font-size: 18px; }
+  #welcome p { margin: 0 0 16px; }
+  #welcome button {
+    width: 100%; min-height: 44px; border: 0; border-radius: 10px;
+    background: #1a1a1a; color: #fff; font: inherit; font-weight: 600; cursor: pointer;
+  }
 </style>
 </head>
 <body>
@@ -92,6 +113,14 @@
 <div id="updated"></div>
 <div id="loading" hidden>Loading cycling network…</div>
 <div id="error" role="alert"></div>
+
+<div id="welcome" role="dialog" aria-modal="true" aria-labelledby="welcome-title" hidden>
+  <div class="card">
+    <h2 id="welcome-title">Calgary Cycling Closures Map</h2>
+    <p>See where bike paths are closed or detoured right now. Tap a <strong style="color:#e11d48">red line</strong> for a closure or a <strong style="color:#7c3aed">purple dotted line</strong> for its detour.</p>
+    <button id="welcome-close">Got it</button>
+  </div>
+</div>
 
 <div id="panel">
   <button id="panel-toggle" aria-expanded="true">
@@ -116,8 +145,7 @@
     </label>
     <label class="row">
       <input type="checkbox" id="t-detour" checked>
-      <span class="swatch" style="background:#16a34a"></span> Detour
-    </label>
+      <span class="swatch" style="background:radial-gradient(circle at 2px 2px,#7c3aed 1.8px,transparent 2.2px) 0 0/6px 4px repeat-x"></span> Detour    </label>
   </div>
 </div>
 
@@ -152,6 +180,27 @@ function setCollapsed(c) {
 panelToggle.addEventListener('click', () =>
   setCollapsed(!panel.classList.contains('collapsed')));
 if (window.matchMedia('(max-width: 600px)').matches) setCollapsed(true);
+
+// First-visit welcome. localStorage can throw (private mode), so every access is guarded.
+(function () {
+  const KEY = 'seenWelcome';
+  const el = document.getElementById('welcome');
+  const btn = document.getElementById('welcome-close');
+  let seen = false;
+  try { seen = localStorage.getItem(KEY) === '1'; } catch (e) {}
+  if (seen) return;
+
+  el.hidden = false;
+  btn.focus();
+  function close() {
+    el.hidden = true;
+    try { localStorage.setItem(KEY, '1'); } catch (e) {}
+    document.removeEventListener('keydown', onKey);
+  }
+  function onKey(e) { if (e.key === 'Escape') close(); }
+  btn.addEventListener('click', close);
+  document.addEventListener('keydown', onKey);
+})();
 
 // Build a popup DOM tree without innerHTML — closure text comes from an
 // external feed (City ArcGIS `CLOSURE_DETOUR` etc.), so it must not be
@@ -252,7 +301,7 @@ map.on('load', async () => {
     paint: { 'line-color': '#e11d48', 'line-width': 4, 'line-opacity': 0.4, 'line-dasharray': [2, 2] } });
   map.addLayer({ id: 'closures-detour', type: 'line', source: 'closures',
     filter: ['==', ['get', 'status'], 'detour'],
-    paint: { 'line-color': '#16a34a', 'line-width': 4 } });
+    paint: { 'line-color': '#7c3aed', 'line-width': 3, 'line-dasharray': [2, 1]  } });
 
   wireToggle('t-current', ['closures-current']);
   wireToggle('t-future', ['closures-future']);
