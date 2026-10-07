@@ -1,35 +1,43 @@
 // web/routing.js — plain ORS route + closure crossing check
-const ORS_URL = 'https://api.openrouteservice.org/v2/directions/cycling-regular/geojson';
-const ORS_KEY = 'PASTE_DOMAIN_RESTRICTED_KEY';   // see note below
 const CLOSURE_BUFFER_M = 15;
+const BLOCKING = new Set(['closed']);   // 'detour' = passable via posted detour; 'reduced' = passable
 
-function isActive(p) {
-  const temporal = p.calgary_temporal_status || 'CURRENT';
-  return p.status === 'closed' && temporal === 'CURRENT';
+function todayCalgary() {
+  return new Date().toLocaleDateString('en-CA', { timeZone: 'America/Edmonton' }); // YYYY-MM-DD
 }
 
-let _bufferedCache = { src: null, feats: [] };
+function closureInfo(p) {
+  const note = p.detour_note || '';
+  const i = note.indexOf(' \u2014 ');
+  const t = p.calgary_temporal_status;
+  return {
+    name: (i > -1 ? note.slice(0, i) : note) || 'Unnamed closure',
+    text: i > -1 ? note.slice(i + 3) : '',
+    // conservative: only FUTURE/PAST are excluded; a missing field still warns
+    blocking: BLOCKING.has(p.status) && t !== 'FUTURE' && t !== 'PAST',
+    pastEndDate: !!p.end_date && p.end_date < todayCalgary(),
+  };
+}
+
+let _cache = { src: null, items: [] };
 function bufferedClosures(closures) {
-  if (_bufferedCache.src === closures) return _bufferedCache.feats;
-  const feats = [];
-  for (const f of closures.features) {
-    if (!isActive(f.properties || {})) continue;
-    const b = turf.buffer(f, CLOSURE_BUFFER_M / 1000, { units: 'kilometers' });
-    if (b) { b.properties = f.properties; feats.push(b); }
+  if (_cache.src === closures) return _cache.items;
+  const items = [];
+  for (const feature of closures.features) {
+    const info = closureInfo(feature.properties || {});
+    if (!info.blocking) continue;
+    const buf = turf.buffer(feature, CLOSURE_BUFFER_M / 1000, { units: 'kilometers' });
+    if (buf) items.push({ buf, feature, info });
   }
-  _bufferedCache = { src: closures, feats };
-  return feats;
+  _cache = { src: closures, items };
+  return items;
 }
 
-// Shared by the UI; the Python batch script mirrors this logic (UTM 11N, 15 m buffer).
-// Returns the ORIGINAL closure features (not buffers) that the route touches.
+// Returns [{feature, info}] for every blocking closure the route touches.
 function routeCrossesClosures(route, closures) {
-  const hits = [];
-  for (const b of bufferedClosures(closures)) {
-    if (turf.booleanIntersects(route, b)) hits.push(b);
-  }
-  // map back to original geometry for highlighting
-  return hits.map(h => closures.features.find(f => f.properties === h.properties));
+  return bufferedClosures(closures)
+    .filter(c => turf.booleanIntersects(route, c.buf))
+    .map(c => ({ feature: c.feature, info: c.info }));
 }
 
 async function fetchPlainRoute(start, end) {   // [lng, lat] each

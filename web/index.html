@@ -12,6 +12,8 @@
 <link rel="apple-touch-icon" href="icon-192.png">
 <link rel="stylesheet" href="vendor/maplibre-gl.css">
 <script src="vendor/maplibre-gl.js"></script>
+<script src="vendor/turf.min.js"></script>
+<script src="routing.js"></script>
 <style>
   html, body { margin: 0; height: 100%; overflow: hidden; }
   #map { position: absolute; inset: 0; }
@@ -107,6 +109,16 @@
     background: #1a1a1a; color: #fff; font: inherit; font-weight: 600; cursor: pointer;
   }
 </style>
+<style>
+  #route-banner { position: fixed; top: calc(env(safe-area-inset-top, 0px) + 8px); left: 50%;
+    transform: translateX(-50%); max-width: 90vw; background: #fff; padding: 6px 12px;
+    border-radius: 16px; font: 14px sans-serif; box-shadow: 0 1px 4px rgba(0,0,0,.3);
+    z-index: 5; white-space: normal; }
+  #route-banner:empty { display: none; }
+  #plan-btn { position: fixed; top: calc(env(safe-area-inset-top, 0px) + 56px); right: 10px;
+    z-index: 5; padding: 8px 12px; border-radius: 8px; border: 0;
+    background: #1a73e8; color: #fff; font: 14px sans-serif; }
+</style>
 </head>
 <body>
 <div id="map"></div>
@@ -148,7 +160,8 @@
       <span class="swatch" style="background:radial-gradient(circle at 2px 2px,#7c3aed 1.8px,transparent 2.2px) 0 0/6px 4px repeat-x"></span> Detour    </label>
   </div>
 </div>
-
+<div id="route-banner"></div>
+<button id="plan-btn" type="button">Plan route</button>
 <script>
 const map = new maplibregl.Map({
   container: 'map',
@@ -354,6 +367,7 @@ map.on('load', async () => {
   }
 
   map.on('click', (e) => {
+    if (planMode) return;
     const hits = closuresNear(e.point);
     if (!hits.length) return;
     new maplibregl.Popup({ maxWidth: '240px' })
@@ -380,12 +394,88 @@ map.on('load', async () => {
     map.addLayer({ id: 'network-unconfirmed', type: 'line', source: 'network',
       filter: ['!=', ['get', 'bicycle_access'], 'designated'],
       paint: { 'line-color': '#7a8ca5', 'line-width': 1.2, 'line-opacity': 0.4 } }, 'closures-current');
-    updateNetworkVis();   // honor checkboxes toggled while loading  } catch (err) {
+    updateNetworkVis();   // honor checkboxes toggled while loading
+  } catch (err) {
     console.error(err);
     showError('Closures loaded, but the cycling network could not be loaded.');
   } finally {
     loading.hidden = true;
   }
+
+  let planMode = false, pts = [], markers = [];
+
+  map.addSource('route', { type: 'geojson', data: { type: 'FeatureCollection', features: [] } });
+  map.addSource('route-hits', { type: 'geojson', data: { type: 'FeatureCollection', features: [] } });
+  map.addLayer({ id: 'route-line', type: 'line', source: 'route',
+    paint: { 'line-color': '#1a73e8', 'line-width': 5, 'line-opacity': 0.85 } });
+  map.addLayer({ id: 'route-hits', type: 'line', source: 'route-hits',
+    paint: { 'line-color': ['case', ['get', 'lapsed'], '#f29900', '#d93025'],
+             'line-width': 9, 'line-opacity': 0.9 } });
+
+  const banner = document.getElementById('route-banner');   // add a <div> in the HTML
+
+  function resetRoute() {
+    pts = []; markers.forEach(m => m.remove()); markers = [];
+    map.getSource('route').setData({ type: 'FeatureCollection', features: [] });
+    map.getSource('route-hits').setData({ type: 'FeatureCollection', features: [] });
+    banner.textContent = planMode ? 'Tap your start point' : '';
+  }
+
+  document.getElementById('plan-btn').onclick = () => {
+    planMode = !planMode;
+    document.getElementById('plan-btn').textContent = planMode ? 'Exit route mode' : 'Plan route';
+    resetRoute();
+  };
+
+  map.on('click', async (e) => {
+    if (!planMode) return;
+    if (pts.length === 2) resetRoute();
+    pts.push([e.lngLat.lng, e.lngLat.lat]);
+    markers.push(new maplibregl.Marker({ color: pts.length === 1 ? '#188038' : '#d93025' })
+      .setLngLat(e.lngLat).addTo(map));
+    if (pts.length === 1) { banner.textContent = 'Tap your destination'; return; }
+
+    banner.textContent = 'Routing…';
+    try {
+      const route = await fetchPlainRoute(pts[0], pts[1]);
+      map.getSource('route').setData(route);
+
+      if (!closuresData) {                      // fail closed
+        banner.textContent = 'Route shown, but closure data is unavailable. Can\'t check for closures.';
+        return;
+      }
+
+      // ===== NEW BLOCK STARTS HERE (replaces old `const hits...` through `banner.textContent = ...`) =====
+      const hits = routeCrossesClosures(route, closuresData);
+
+      map.getSource('route-hits').setData({
+        type: 'FeatureCollection',
+        features: hits.map(h => ({
+          ...h.feature,
+          properties: { ...h.feature.properties, lapsed: h.info.pastEndDate },
+        })),
+      });
+
+      // one closure can span several features, so group by name
+      const byName = new Map();
+      for (const h of hits) {
+        byName.set(h.info.name, (byName.get(h.info.name) || false) || h.info.pastEndDate);
+      }
+      const parts = [...byName].map(([name, lapsed]) =>
+        lapsed ? `${name} ⚑ past listed end date, may be cleared` : name);
+
+      const stale = (Date.now() - new Date(generatedAt)) > 6 * 3600e3;
+      const km = (route.properties.summary.distance / 1000).toFixed(1);
+
+      banner.textContent = parts.length
+        ? `⚠ ${km} km route crosses ${parts.length} closure${parts.length > 1 ? 's' : ''}: ${parts.join('; ')}`
+        : `No known closures on this ${km} km route` + (stale ? ' (closure data may be stale)' : '');
+      // ===== NEW BLOCK ENDS HERE =====
+
+    } catch (err) {
+      banner.textContent = 'Couldn\'t get a route. Try again.';
+    }
+  });
 
 });
 </script>
