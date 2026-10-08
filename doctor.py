@@ -551,7 +551,7 @@ def check_generated_field():
     except ValueError:
         raise SchemaViolation(f"`generated` = {gen!r} is not parseable as ISO-8601.")
 
-@check("DATA-002", "closures.geojson is fresh (< 48 hours old)")
+@check("DATA-002", "closures.geojson is fresh (< 8 hours old)")
 def check_freshness():
     path = DATA / "closures.geojson"
     if not path.exists():
@@ -566,7 +566,7 @@ def check_freshness():
     if ts.tzinfo is None:
         ts = ts.replace(tzinfo=timezone.utc)
     age_h = (datetime.now(timezone.utc) - ts).total_seconds() / 3600.0
-    if age_h > 48:
+    if age_h > 8:
         raise DataStale(
             f"closures.geojson was generated {age_h:.1f}h ago.",
             hint="Re-run `python3 Scraping/merge.py`, or wire up the GitHub "

@@ -219,3 +219,11 @@ __marimo__/
 
 # Full merged data — large, regenerable by merge.py, not meant for version control
 data/combined.geojson
+
+worker/.wrangler/
+
+# wrangler files
+.wrangler
+.dev.vars*
+!.dev.vars.example
+!.env.example
