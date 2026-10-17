@@ -1,0 +1,59 @@
+name: Refresh SF closures
+
+on:
+  schedule:
+    # Every 3 hours at :45. Offset from the Calgary job (:15) so the two
+    # never push at the same moment. SFMTA's export itself updates daily.
+    - cron: "45 */3 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: refresh-closures-sf
+  cancel-in-progress: false
+
+jobs:
+  refresh:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        # sfmta_closures_source.py imports `requests`.
+        run: pip install requests
+
+      - name: Refresh closures from SFMTA (DataSF)
+        # Exit 0 = success (real closures written, or genuinely nothing
+        #          active/upcoming).
+        # Exit 1 = fetch/parse failed; data/sf/closures.geojson was left
+        #          untouched and the run goes red so a human investigates.
+        run: python3 Scraping/refresh_closures_sf.py
+
+      - name: Commit and push if closures changed
+        run: |
+          set -euo pipefail
+
+          # `git status --porcelain` (not `git diff`) so the very first run,
+          # when the file is new and untracked, still gets committed.
+          if [ -z "$(git status --porcelain data/sf/closures.geojson)" ]; then
+            echo "No change in data/sf/closures.geojson; nothing to commit."
+            exit 0
+          fi
+
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add data/sf/closures.geojson
+          git commit -m "Refresh SF closures ($(date -u +%Y-%m-%dT%H:%MZ))"
+
+          # The Calgary job may have pushed since we checked out.
+          git pull --rebase
+          git push

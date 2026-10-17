@@ -1,0 +1,385 @@
+diff --git a/Scraping/cities.py b/Scraping/cities.py
+new file mode 100644
+index 0000000..ac9e95f
+--- /dev/null
++++ b/Scraping/cities.py
+@@ -0,0 +1,32 @@
++"""
++Per-city settings (decision 3: one repo, a city setting, no separate SF copy).
++
++Only the SF pipeline reads this so far. Calgary still uses its own
++hardcoded paths/constants; migrating it onto this file is a follow-up,
++deliberately NOT done before the SF demo so the live Calgary map can't break.
++"""
++
++CITIES = {
++    "calgary": {
++        "name": "Calgary",
++        "center": [-114.0719, 51.0447],
++        "zoom": 11,
++        "timezone": "America/Edmonton",
++        "data_dir": "data",                      # existing layout, unchanged
++        "banner": None,
++    },
++    "sf": {
++        "name": "San Francisco",
++        "center": [-122.4194, 37.7749],
++        "zoom": 12,
++        "timezone": "America/Los_Angeles",
++        "data_dir": "data/sf",
++        # Required by the project context: SFMTA data excludes Public Works and
++        # Police Department closures, and the map must say so.
++        "banner": (
++            "Shows street closures permitted by SFMTA only. Closures managed by "
++            "Public Works or the Police Department are not included."
++        ),
++        "attribution": "SFMTA Temporary Street Closures via DataSF (PDDL)",
++    },
++}
+diff --git a/Scraping/refresh_closures_sf.py b/Scraping/refresh_closures_sf.py
+new file mode 100644
+index 0000000..a123893
+--- /dev/null
++++ b/Scraping/refresh_closures_sf.py
+@@ -0,0 +1,48 @@
++"""
++SF closures refresh (fail-closed, mirrors refresh_closures.py).
++
++Writes data/sf/closures.geojson. Exit codes:
++  0  success (including a genuine "nothing active or upcoming")
++  1  fetch/parse failed; the existing file is left UNTOUCHED.
++
++    python3 Scraping/refresh_closures_sf.py
++"""
++
++import sys
++from datetime import datetime, timezone
++from pathlib import Path
++
++sys.path.insert(0, str(Path(__file__).resolve().parent))
++sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
++
++from cities import CITIES
++from schema import make_feature_collection
++from sources.sfmta_closures_source import fetch_closures
++from build_layers import _slim, write_layer
++
++SF = CITIES["sf"]
++OUT_PATH = Path(__file__).resolve().parent.parent / SF["data_dir"] / "closures.geojson"
++SF_KEEP = (
++    "status", "calgary_temporal_status", "temporal_status", "start_date", "end_date",
++    "detour_note", "closure_type", "window_start_utc", "window_end_utc", "windows_in_lookahead",
++)
++
++
++def main() -> int:
++    try:
++        features, meta = fetch_closures()
++    except Exception as e:
++        print(f"[refresh_closures_sf] Fetch failed: {e}", file=sys.stderr)
++        print(f"[refresh_closures_sf] Leaving {OUT_PATH} untouched.", file=sys.stderr)
++        return 1
++
++    layer = make_feature_collection([_slim(f, SF_KEEP) for f in features])
++    layer["generated"] = datetime.now(timezone.utc).isoformat(timespec="seconds")
++    layer["source_data_as_of"] = meta["data_as_of"]   # how old SFMTA's own export is
++    layer["scope_note"] = SF["banner"]
++    write_layer(OUT_PATH, layer)
++    return 0
++
++
++if __name__ == "__main__":
++    sys.exit(main())
+diff --git a/Scraping/sources/sfmta_closures_source.py b/Scraping/sources/sfmta_closures_source.py
+new file mode 100644
+index 0000000..0268497
+--- /dev/null
++++ b/Scraping/sources/sfmta_closures_source.py
+@@ -0,0 +1,195 @@
++"""
++SFMTA Temporary Street Closures source (DataSF dataset 8x25-yybr).
++
++Why the CSV export: it is the format whose real rows were inspected on
++2026-10-16 (columns, date text format, WKT geometry, UTC fields). The SODA JSON
++API would need its own verification of date/geometry typing, so it is not used.
++
++Verified against real rows:
++  - *_utc fields are true UTC (local PDT/PST + 7/8h). We use them, not *_dt.
++  - Date text format is "%Y/%m/%d %I:%M:%S %p".
++  - Geometry column `shape` is WKT LINESTRING ("LINESTRING (lon lat, lon lat)").
++  - One row per occurrence per street segment (e.g. Gold St has one row per
++    night), so rows must be collapsed into active-now / next-N-days.
++  - `status` includes non-permitted values -> filter status == Permitted.
++
++Decision 2 (cyclist scope): only "Special Traffic Permit" (construction) and
++"Special Event" rows are emitted. "Roadway Shared Spaces" rows are counted and
++logged but NOT shown as closures (they are flagged for later categorization).
++
++Contract for fetch_closures():
++  - Returns (features, meta). Returns an empty list ONLY if the fetch + parse
++    succeeded and nothing is active/upcoming.
++  - RAISES on network/HTTP/parse failure, missing columns, or a suspiciously
++    small file. Callers must not overwrite published data on exceptions.
++
++Run directly to print a few raw rows and the filter summary:
++    python3 Scraping/sources/sfmta_closures_source.py
++"""
++
++import csv
++import io
++import re
++import sys
++from collections import defaultdict
++from datetime import datetime, timedelta, timezone
++from pathlib import Path
++from zoneinfo import ZoneInfo
++
++sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
++from schema import make_feature
++
++CSV_URL = "https://data.sfgov.org/api/views/8x25-yybr/rows.csv?accessType=DOWNLOAD"
++SF_TZ = ZoneInfo("America/Los_Angeles")
++DATE_FMT = "%Y/%m/%d %I:%M:%S %p"
++
++REQUIRED_COLUMNS = {
++    "case_num", "case_name", "type", "status", "loc_desc", "veh_imp", "info",
++    "start_utc", "end_utc", "shape", "data_as_of",
++}
++SHOWN_TYPES = {"Special Traffic Permit", "Special Event"}   # decision 2
++MIN_PLAUSIBLE_ROWS = 100       # file had 4,279 rows on 2026-10-08; far less = bad download
++LOOKAHEAD_DAYS = 7
++
++
++def _parse_utc(text: str) -> datetime | None:
++    try:
++        return datetime.strptime(text.strip(), DATE_FMT).replace(tzinfo=timezone.utc)
++    except (ValueError, AttributeError):
++        return None
++
++
++_NUM_PAIR = re.compile(r"(-?\d+\.?\d*)\s+(-?\d+\.?\d*)")
++
++
++def _wkt_to_geometry(wkt: str) -> dict | None:
++    """Parse LINESTRING / MULTILINESTRING WKT into GeoJSON. None if unparseable."""
++    if not wkt:
++        return None
++    s = wkt.strip().upper()
++    if s.startswith("MULTILINESTRING"):
++        parts = re.findall(r"\(([^()]+)\)", wkt)
++        lines = [[[float(x), float(y)] for x, y in _NUM_PAIR.findall(p)] for p in parts]
++        lines = [l for l in lines if len(l) >= 2]
++        return {"type": "MultiLineString", "coordinates": lines} if lines else None
++    if s.startswith("LINESTRING"):
++        coords = [[float(x), float(y)] for x, y in _NUM_PAIR.findall(wkt)]
++        return {"type": "LineString", "coordinates": coords} if len(coords) >= 2 else None
++    return None
++
++
++def _status_for(veh_imp: str) -> str | None:
++    """Map SFMTA vehicle impact to our schema status. These describe VEHICLES,
++    not bikes; 'some lanes closed' is treated as 'reduced' (not blocking)."""
++    v = (veh_imp or "").strip().lower()
++    if v == "all-lanes-closed":
++        return "closed"
++    if v == "some-lanes-closed":
++        return "reduced"
++    return None   # all-lanes-open / unknown: not a closure
++
++
++def parse_rows(csv_text: str) -> list[dict]:
++    reader = csv.DictReader(io.StringIO(csv_text))
++    missing = REQUIRED_COLUMNS - set(reader.fieldnames or [])
++    if missing:
++        raise ValueError(f"SFMTA CSV is missing expected columns: {sorted(missing)}")
++    rows = list(reader)
++    if len(rows) < MIN_PLAUSIBLE_ROWS:
++        raise ValueError(f"SFMTA CSV has only {len(rows)} rows; refusing to trust it")
++    return rows
++
++
++def build_features(rows: list[dict], now: datetime, lookahead_days: int = LOOKAHEAD_DAYS):
++    """Filter + collapse rows into one feature per (case_num, street segment).
++
++    Returns (features, meta). `now` is injected so this is testable.
++    """
++    horizon = now + timedelta(days=lookahead_days)
++    stats = defaultdict(int)
++    groups: dict[tuple, list[dict]] = defaultdict(list)
++
++    for r in rows:
++        stats["rows"] += 1
++        if (r.get("status") or "").strip() != "Permitted":
++            stats["dropped_not_permitted"] += 1
++            continue
++        rtype = (r.get("type") or "").strip()
++        if rtype not in SHOWN_TYPES:
++            stats["flagged_" + rtype.lower().replace(" ", "_")] += 1   # e.g. shared spaces
++            continue
++        status = _status_for(r.get("veh_imp"))
++        if status is None:
++            stats["dropped_not_a_closure"] += 1
++            continue
++        start, end = _parse_utc(r.get("start_utc")), _parse_utc(r.get("end_utc"))
++        geom = _wkt_to_geometry(r.get("shape"))
++        if not (start and end and geom) or end <= start:
++            stats["dropped_unparseable"] += 1
++            continue
++        if end <= now:
++            stats["dropped_past"] += 1
++            continue
++        if start > horizon:
++            stats["dropped_beyond_lookahead"] += 1
++            continue
++        r["_start"], r["_end"], r["_geom"], r["_status"] = start, end, geom, status
++        groups[(r["case_num"], r.get("cnn") or r.get("loc_desc"))].append(r)
++
++    features = []
++    for occ in groups.values():
++        occ.sort(key=lambda r: r["_start"])
++        # Active now beats upcoming; otherwise the soonest upcoming window.
++        active = [r for r in occ if r["_start"] <= now < r["_end"]]
++        primary = active[0] if active else occ[0]
++        temporal = "CURRENT" if active else "FUTURE"
++        text = (primary.get("loc_desc") or "").strip()
++        name = (primary.get("case_name") or "Closure").strip()
++        features.append(make_feature(
++            geometry=primary["_geom"],
++            source="sfmta-temporary-street-closures",
++            status=primary["_status"],
++            start_date=primary["_start"].astimezone(SF_TZ).date().isoformat(),
++            end_date=primary["_end"].astimezone(SF_TZ).date().isoformat(),
++            # "NAME — text" matches the Calgary note format, so web/routing.js
++            # closureInfo() splits it correctly with no changes.
++            detour_note=f"{name} — {text}" if text else name,
++            extra_properties={
++                "calgary_temporal_status": temporal,   # existing web code keys on this name
++                "temporal_status": temporal,           # generic name for the later rename
++                "closure_type": primary["type"],
++                "window_start_utc": primary["_start"].isoformat(),
++                "window_end_utc": primary["_end"].isoformat(),
++                "windows_in_lookahead": len(occ),
++            },
++        ))
++
++    stats["features_out"] = len(features)
++    as_of = [d for d in (_parse_utc(r.get("data_as_of") or "") for r in rows) if d]
++    meta = {"stats": dict(stats), "data_as_of": max(as_of).isoformat() if as_of else None}
++    return features, meta
++
++
++def fetch_closures(now: datetime | None = None):
++    """Download the CSV and return (features, meta). Raises on any failure."""
++    import requests
++
++    resp = requests.get(CSV_URL, timeout=60)
++    resp.raise_for_status()
++    rows = parse_rows(resp.content.decode("utf-8-sig"))
++    features, meta = build_features(rows, now or datetime.now(timezone.utc))
++    print(f"[sfmta_closures_source] {meta['stats']}")
++    return features, meta
++
++
++if __name__ == "__main__":
++    import requests
++
++    raw = requests.get(CSV_URL, timeout=60)
++    raw.raise_for_status()
++    sample = list(csv.DictReader(io.StringIO(raw.text)))[:3]
++    print("RAW sample rows:")
++    for r in sample:
++        print(" ", {k: r[k] for k in ("case_name", "type", "status", "start_utc", "end_utc", "veh_imp")})
++    feats, meta = fetch_closures()
++    print(f"\n{len(feats)} features; data_as_of={meta['data_as_of']}")
+diff --git a/Scraping/tests/fixtures/sfmta_sample.csv b/Scraping/tests/fixtures/sfmta_sample.csv
+new file mode 100644
+index 0000000..331fc48
+--- /dev/null
++++ b/Scraping/tests/fixtures/sfmta_sample.csv
+@@ -0,0 +1,10 @@
++objectid,case_num,case_name,type,status,start_date,start_time,start_dt,end_date,end_time,end_dt,loc_desc,cnn,street,from_st,to_st,direction,veh_imp,info,start_utc,end_utc,shape,data_as_of,data_loaded_at,created_date,last_edited_date
++27458820,1516551,Sunday Streets Excelsior,Special Event,Permitted,2026/10/18,09:00:00,2026/10/18 09:00:00 AM,2026/10/18,18:00:00,2026/10/18 06:00:00 PM,MISSION ST between THERESA ST and GENEVA AVE,9174101,MISSION ST,KENNY ALY,ITALY AVE,undefined,all-lanes-closed,,2026/10/18 04:00:00 PM,2026/10/19 01:00:00 AM,"LINESTRING (-122.439500375 37.718467226, -122.438863486 37.71930936)",2026/10/15 12:03:28 AM,x,x,x
++27461156,1516551,Sunday Streets Excelsior,Special Event,Permitted,2026/10/18,09:00:00,2026/10/18 09:00:00 AM,2026/10/18,18:00:00,2026/10/18 06:00:00 PM,MISSION ST between THERESA ST and GENEVA AVE,9172101,MISSION ST,ONONDAGA AVE,FRANCE AVE,undefined,all-lanes-closed,,2026/10/18 04:00:00 PM,2026/10/19 01:00:00 AM,"LINESTRING (-122.438329414 37.720015525, -122.43746114 37.721163548)",2026/10/15 12:03:28 AM,x,x,x
++27458848,1616657,Winter Walk,Special Event,Pending Payment,2026/12/04,06:00:00,2026/12/04 06:00:00 AM,2026/12/30,18:00:00,2026/12/30 06:00:00 PM,MAIDEN LN between STOCKTON ST and KEARNY ST,8626000,MAIDEN LN,GRANT AVE,STOCKTON ST,undefined,all-lanes-closed,,2026/12/04 02:00:00 PM,2026/12/31 02:00:00 AM,"LINESTRING (-122.406683172 37.788033306, -122.405131392 37.788230296)",2026/10/15 12:03:28 AM,x,x,x
++27458853,261814,LEND LEASE,Special Traffic Permit,Permitted,2026/07/02,00:00:00,2026/07/02 12:00:00 AM,2026/10/01,23:59:00,2026/10/01 11:59:00 PM,VAN NESS AVE between FELL ST and MARKET ST,13143102,VAN NESS AVE,OAK ST,HICKORY ST,undefined,some-lanes-closed,"to perform:additional street space footprint",2026/07/02 08:00:00 AM,2026/10/02 07:59:00 AM,"LINESTRING (-122.419491512 37.775894187, -122.419396888 37.775422221)",2026/10/15 12:03:28 AM,x,x,x
++27461155,262206,PG&E,Special Traffic Permit,Permitted,2026/10/17,00:00:00,2026/10/17 12:00:00 AM,2026/10/17,23:59:00,2026/10/17 11:59:00 PM,PRECITA AVE between FOLSOM ST and SHOTWELL ST,10744000,PRECITA AVE,HARRISON ST,ALABAMA ST,undefined,some-lanes-closed,"pole replacement",2026/10/17 07:00:00 AM,2026/10/18 06:59:00 AM,"LINESTRING (-122.410495199 37.747354199, -122.411388068 37.747301036)",2026/10/15 12:03:28 AM,x,x,x
++27463239,1441011,Gold St - Bix,Roadway Shared Spaces,Permitted,2026/10/16,16:00:00,2026/10/16 04:00:00 PM,2026/10/16,23:59:00,2026/10/16 11:59:00 PM,GOLD ST between MONTGOMERY ST and BALANCE ST,6249000,GOLD ST,BALANCE ST,MONTGOMERY ST,undefined,all-lanes-closed,,2026/10/16 11:00:00 PM,2026/10/17 06:59:00 AM,"LINESTRING (-122.403549167 37.796671323, -122.402461973 37.796806634)",2026/10/15 12:03:28 AM,x,x,x
++27458842,1414320,Mission Community Market 2026,Special Event,Permitted,2026/10/15,12:00:00,2026/10/15 12:00:00 PM,2026/10/15,20:00:00,2026/10/15 08:00:00 PM,BARTLETT ST between 22ND ST and 21ST ST,2742000,BARTLETT ST,21ST ST,22ND ST,undefined,all-lanes-closed,,2026/10/15 07:00:00 PM,2026/10/16 03:00:00 AM,"LINESTRING (-122.419857943 37.75536573, -122.420011098 37.756968602)",2026/10/15 12:03:28 AM,x,x,x
++27458843,1414320,Mission Community Market 2026,Special Event,Permitted,2026/10/22,12:00:00,2026/10/22 12:00:00 PM,2026/10/22,20:00:00,2026/10/22 08:00:00 PM,BARTLETT ST between 22ND ST and 21ST ST,2742000,BARTLETT ST,21ST ST,22ND ST,undefined,all-lanes-closed,,2026/10/22 07:00:00 PM,2026/10/23 03:00:00 AM,"LINESTRING (-122.419857943 37.75536573, -122.420011098 37.756968602)",2026/10/15 12:03:28 AM,x,x,x
++27458819,1541774,SF T100,Special Event,Application In Review,2027/06/05,05:00:00,2027/06/05 05:00:00 AM,2027/06/05,10:30:00,2027/06/05 10:30:00 AM,LAKE ST between EL CAMINO DEL MAR and 30TH AVE,8040101,LAKE ST,30TH AVE,EL CAMINO DEL MAR,undefined,all-lanes-closed,,2027/06/05 12:00:00 PM,2027/06/05 05:30:00 PM,"LINESTRING (-122.492080319 37.786381706, -122.49047449 37.785118745)",2026/10/15 12:03:28 AM,x,x,x
+diff --git a/Scraping/tests/test_sfmta_source.py b/Scraping/tests/test_sfmta_source.py
+new file mode 100644
+index 0000000..d9e18a5
+--- /dev/null
++++ b/Scraping/tests/test_sfmta_source.py
+@@ -0,0 +1,70 @@
++"""Run: python3 -m unittest Scraping/tests/test_sfmta_source.py  (from repo root)
++Fixture rows are copied from the live DataSF export (inspected 2026-10-16)."""
++import csv, sys, unittest
++from datetime import datetime, timezone
++from pathlib import Path
++
++sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
++from sources.sfmta_closures_source import build_features, parse_rows, _wkt_to_geometry
++
++FIX = Path(__file__).parent / "fixtures" / "sfmta_sample.csv"
++NOW = datetime(2026, 10, 16, 18, 0, tzinfo=timezone.utc)   # Fri 11:00 AM PDT
++
++
++def rows():
++    return list(csv.DictReader(open(FIX, encoding="utf-8")))
++
++
++class SfmtaSource(unittest.TestCase):
++    def setUp(self):
++        self.features, self.meta = build_features(rows(), NOW)
++        self.s = self.meta["stats"]
++
++    def test_expected_survivors(self):
++        # Oct 22 market is 6 days out -> inside the 7-day lookahead.
++        names = sorted(f["properties"]["detour_note"].split(" — ")[0] for f in self.features)
++        self.assertEqual(names, ["Mission Community Market 2026", "PG&E",
++                                 "Sunday Streets Excelsior", "Sunday Streets Excelsior"])
++
++    def test_filters(self):
++        self.assertEqual(self.s["dropped_not_permitted"], 2)       # Pending Payment + Application In Review
++        self.assertEqual(self.s["flagged_roadway_shared_spaces"], 1)  # decision 2: not shown
++        self.assertEqual(self.s["dropped_past"], 2)                # Van Ness permit + Oct 15 market
++        self.assertEqual(self.s.get("dropped_beyond_lookahead", 0), 0)
++        feats, meta = build_features(rows(), NOW, lookahead_days=3)   # shrink window
++        self.assertEqual(meta["stats"]["dropped_beyond_lookahead"], 1)  # Oct 22 market now out
++
++    def test_status_mapping_and_temporal(self):
++        by = {f["properties"]["detour_note"].split(" — ")[0]: f["properties"] for f in self.features}
++        self.assertEqual(by["Sunday Streets Excelsior"]["status"], "closed")
++        self.assertEqual(by["PG&E"]["status"], "reduced")          # some lanes closed != blocking
++        self.assertEqual(by["Sunday Streets Excelsior"]["temporal_status"], "FUTURE")
++
++    def test_local_dates_use_sf_timezone(self):
++        p = next(f for f in self.features if "Sunday" in f["properties"]["detour_note"])["properties"]
++        self.assertEqual(p["start_date"], "2026-10-18")
++
++    def test_active_now_detected(self):
++        now = datetime(2026, 10, 18, 20, 0, tzinfo=timezone.utc)   # during Sunday Streets
++        feats, _ = build_features(rows(), now)
++        cur = [f for f in feats if f["properties"]["temporal_status"] == "CURRENT"]
++        self.assertEqual(len(cur), 2)   # the two Mission St segments
++
++    def test_data_as_of(self):
++        self.assertEqual(self.meta["data_as_of"], "2026-10-15T00:03:28+00:00")
++
++    def test_wkt(self):
++        g = _wkt_to_geometry("LINESTRING (-122.1 37.1, -122.2 37.2)")
++        self.assertEqual(g["coordinates"], [[-122.1, 37.1], [-122.2, 37.2]])
++        self.assertEqual(_wkt_to_geometry("MULTILINESTRING ((1 2, 3 4), (5 6, 7 8))")["type"], "MultiLineString")
++        self.assertIsNone(_wkt_to_geometry("POINT (1 2)"))
++
++    def test_small_or_bad_file_is_rejected(self):
++        with self.assertRaises(ValueError):
++            parse_rows(FIX.read_text(encoding="utf-8"))            # only 9 rows -> refuse
++        with self.assertRaises(ValueError):
++            parse_rows("a,b\n1,2\n")                               # missing columns
++
++
++if __name__ == "__main__":
++    unittest.main()

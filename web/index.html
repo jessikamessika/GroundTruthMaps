@@ -2,12 +2,12 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<title>Calgary Cycling Closures Map</title>
+<title>Cycling Closures Map</title>
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="theme-color" content="#1a1a1a">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="mobile-web-app-capable" content="yes">
-<link rel="manifest" href="manifest.webmanifest">
+<link rel="manifest" href="manifest-sf.webmanifest">
 <link rel="icon" href="icon-192.png">
 <link rel="apple-touch-icon" href="icon-192.png">
 <link rel="stylesheet" href="vendor/maplibre-gl.css">
@@ -70,6 +70,16 @@
   }
   #loading[hidden] { display: none; }
 
+    /* Data-scope banner (SF: SFMTA-only disclaimer) */
+  #scope-note {
+    position: absolute; z-index: 2; left: 8px; right: 8px;
+    bottom: calc(24px + env(safe-area-inset-bottom));
+    background: rgba(255,255,255,0.96); color: #1a1a1a;
+    padding: 6px 10px; border-radius: 10px;
+    font: 12px/1.3 system-ui, sans-serif;
+    box-shadow: 0 1px 4px rgba(0,0,0,0.25);
+  }
+  #scope-note:empty { display: none; }
 
   /* Load-failure banner */
   #error {
@@ -123,13 +133,14 @@
 <body>
 <div id="map"></div>
 <div id="updated"></div>
+<div id="scope-note" role="note"></div>
 <div id="loading" hidden>Loading cycling network…</div>
 <div id="error" role="alert"></div>
 
 <div id="welcome" role="dialog" aria-modal="true" aria-labelledby="welcome-title" hidden>
   <div class="card">
-    <h2 id="welcome-title">Calgary Cycling Closures Map</h2>
-    <p>See where bike paths are closed or detoured right now. Tap a <strong style="color:#e11d48">red line</strong> for a closure or a <strong style="color:#7c3aed">purple dotted line</strong> for its detour.</p>
+    <h2 id="welcome-title"></h2>
+    <p>See where streets and paths are closed or restricted right now. Tap a <strong style="color:#e11d48">red line</strong> for a closure<span id="detour-hint"> or a <strong style="color:#7c3aed">purple dotted line</strong> for its detour</span>.</p>
     <button id="welcome-close">Got it</button>
   </div>
 </div>
@@ -163,16 +174,36 @@
 <div id="route-banner"></div>
 <button id="plan-btn" type="button">Plan route</button>
 <script>
+
+const CITIES = {
+  calgary: { name: 'Calgary', center: [-114.0719, 51.0447], zoom: 11, timezone: 'America/Edmonton',
+              dataDir: '../data', network: true,
+              attribution: 'City of Calgary Open Data (Open Government Licence - Calgary)' },
+  sf:      { name: 'San Francisco', center: [-122.4194, 37.7749], zoom: 12, timezone: 'America/Los_Angeles',
+              dataDir: '../data/sf', network: false,
+              attribution: 'SFMTA Temporary Street Closures via DataSF' }
+};
+const CITY = CITIES[new URLSearchParams(location.search).get('city')] || CITIES.sf;
+if (CITY === CITIES.calgary) document.querySelector('link[rel="manifest"]').href = 'manifest.webmanifest';
+document.title = CITY.name + ' Cycling Closures Map';
+document.getElementById('welcome-title').textContent = CITY.name + ' Cycling Closures Map';
+
+if (!CITY.network) {
+  document.getElementById('detour-hint').style.display = 'none';
+  ['t-network', 't-unconfirmed', 't-detour'].forEach(id =>
+    document.getElementById(id).closest('label').style.display = 'none');
+}
+
 const map = new maplibregl.Map({
   container: 'map',
   style: 'https://tiles.openfreemap.org/styles/liberty',
-  center: [-114.0719, 51.0447],
-  zoom: 11,
+  center: CITY.center,
+  zoom: CITY.zoom,
   attributionControl: {
     compact: true,
     customAttribution:
       '© OpenStreetMap contributors (ODbL) · ' +
-      'City of Calgary Open Data (Open Government Licence - Calgary)'
+      CITY.attribution
   }
 });
 
@@ -298,10 +329,11 @@ map.on('load', async () => {
 
   // 1. Closures first: small, and the point of the app
   try {
-    const r = await fetch('../data/closures.geojson');
+    const r = await fetch(CITY.dataDir + '/closures.geojson');
     if (!r.ok) throw new Error('closures HTTP ' + r.status);
     const closures = await r.json();
     showUpdated(closures.generated);
+    document.getElementById('scope-note').textContent = closures.scope_note || '';
     closuresData = closures;
     generatedAt = closures.generated;
     map.addSource('closures', { type: 'geojson', data: closures });
@@ -388,26 +420,28 @@ map.on('load', async () => {
   });
 
   // 2. Network in the background, inserted beneath the closure layers
-  loading.hidden = false;
-  try {
-    const r = await fetch('../data/network.geojson');
-    if (!r.ok) throw new Error('network HTTP ' + r.status);
-    const network = await r.json();
-    map.addSource('network', { type: 'geojson', data: network });
-    map.addLayer({ id: 'network-confirmed', type: 'line', source: 'network',
-      filter: ['==', ['get', 'bicycle_access'], 'designated'],
-      paint: { 'line-color': '#7a8ca5', 'line-width': 1.5, 'line-opacity': 0.7 } }, 'closures-current');
-    map.addLayer({ id: 'network-unconfirmed', type: 'line', source: 'network',
-      filter: ['!=', ['get', 'bicycle_access'], 'designated'],
-      paint: { 'line-color': '#7a8ca5', 'line-width': 1.2, 'line-opacity': 0.4 } }, 'closures-current');
-    updateNetworkVis();   // honor checkboxes toggled while loading
-  } catch (err) {
-    console.error(err);
-    showError('Closures loaded, but the cycling network could not be loaded.');
-  } finally {
-    loading.hidden = true;
+  if (CITY.network) {
+    loading.hidden = false;
+    try {
+      const r = await fetch(CITY.dataDir + '/network.geojson');
+      if (!r.ok) throw new Error('network HTTP ' + r.status);
+      const network = await r.json();
+      map.addSource('network', { type: 'geojson', data: network });
+      map.addLayer({ id: 'network-confirmed', type: 'line', source: 'network',
+        filter: ['==', ['get', 'bicycle_access'], 'designated'],
+        paint: { 'line-color': '#7a8ca5', 'line-width': 1.5, 'line-opacity': 0.7 } }, 'closures-current');
+      map.addLayer({ id: 'network-unconfirmed', type: 'line', source: 'network',
+        filter: ['!=', ['get', 'bicycle_access'], 'designated'],
+        paint: { 'line-color': '#7a8ca5', 'line-width': 1.2, 'line-opacity': 0.4 } }, 'closures-current');
+      updateNetworkVis();   // honor checkboxes toggled while loading
+    } catch (err) {
+      console.error(err);
+      showError('Closures loaded, but the cycling network could not be loaded.');
+    } finally {
+      loading.hidden = true;
+    }
   }
-  // try{
+
   // routing starts
   map.addSource('route', { type: 'geojson', data: { type: 'FeatureCollection', features: [] } });
   map.addSource('route-hits', { type: 'geojson', data: { type: 'FeatureCollection', features: [] } });
