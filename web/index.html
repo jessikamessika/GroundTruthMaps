@@ -188,6 +188,12 @@ if (CITY === CITIES.calgary) document.querySelector('link[rel="manifest"]').href
 document.title = CITY.name + ' Cycling Closures Map';
 document.getElementById('welcome-title').textContent = CITY.name + ' Cycling Closures Map';
 
+if (!CITY.network) {
+  document.getElementById('detour-hint').style.display = 'none';
+  ['t-network', 't-unconfirmed', 't-detour'].forEach(id =>
+    document.getElementById(id).closest('label').style.display = 'none');
+}
+
 const map = new maplibregl.Map({
   container: 'map',
   style: 'https://tiles.openfreemap.org/styles/liberty',
@@ -327,7 +333,7 @@ map.on('load', async () => {
     if (!r.ok) throw new Error('closures HTTP ' + r.status);
     const closures = await r.json();
     showUpdated(closures.generated);
-    document.getElementById('scope-note').textContent = closures.scope_note || '';   // <-- new
+    document.getElementById('scope-note').textContent = closures.scope_note || '';
     closuresData = closures;
     generatedAt = closures.generated;
     map.addSource('closures', { type: 'geojson', data: closures });
@@ -417,7 +423,7 @@ map.on('load', async () => {
   if (CITY.network) {
     loading.hidden = false;
     try {
-      const r = await fetch('../data/network.geojson');
+      const r = await fetch(CITY.dataDir + '/network.geojson');
       if (!r.ok) throw new Error('network HTTP ' + r.status);
       const network = await r.json();
       map.addSource('network', { type: 'geojson', data: network });

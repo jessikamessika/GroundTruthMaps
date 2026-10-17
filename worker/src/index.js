@@ -6,7 +6,7 @@ const ALLOWED_ORIGINS = new Set([
 const ORS = 'https://api.openrouteservice.org/v2/directions/cycling-regular/geojson';
 const BBOXES = [
   { minLng: -114.5,  maxLng: -113.7,  minLat: 50.8,  maxLat: 51.3  },  // Calgary
-  { minLng: -122.55, maxLng: -122.36, minLat: 37.71, maxLat: 37.84 },  // San Francisco (checked GMaps.)
+  { minLng: -122.55, maxLng: -122.35, minLat: 37.70, maxLat: 37.84 },  // San Francisco (checked GMaps.)
 ];
 const inAnyBox = p => BBOXES.some(b => p[0] >= b.minLng && p[0] <= b.maxLng && p[1] >= b.minLat && p[1] <= b.maxLat);
 
