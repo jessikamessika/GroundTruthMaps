@@ -3,8 +3,8 @@ const PROXY_URL = 'https://ors-proxy.jess-jm-zhang.workers.dev';
 const CLOSURE_BUFFER_M = 15;
 const BLOCKING = new Set(['closed']);   // 'detour' = passable via posted detour; 'reduced' = passable
 
-function todayCalgary() {
-  return new Date().toLocaleDateString('en-CA', { timeZone: 'America/Edmonton' }); // YYYY-MM-DD
+function todayLocal() {
+  return new Date().toLocaleDateString('en-CA', { timeZone: CITY.timezone });
 }
 
 function closureInfo(p) {
@@ -16,7 +16,7 @@ function closureInfo(p) {
     text: i > -1 ? note.slice(i + 3) : '',
     // conservative: only FUTURE/PAST are excluded; a missing field still warns
     blocking: BLOCKING.has(p.status) && t !== 'FUTURE' && t !== 'PAST',
-    pastEndDate: !!p.end_date && p.end_date < todayCalgary(),
+    pastEndDate: !!p.end_date && p.end_date < todayLocal(),
   };
 }
 
