@@ -166,6 +166,10 @@
       <input type="checkbox" id="t-future" checked>
       <span class="swatch" style="background:#e11d48;opacity:0.35"></span> Closed (upcoming)
     </label>
+    <label class="row" id="row-reduced">
+      <input type="checkbox" id="t-reduced" checked>
+      <span class="swatch" style="background:#f59e0b"></span> Lanes reduced (may be passable)
+    </label>
     <label class="row">
       <input type="checkbox" id="t-detour" checked>
       <span class="swatch" style="background:radial-gradient(circle at 2px 2px,#7c3aed 1.8px,transparent 2.2px) 0 0/6px 4px repeat-x"></span> Detour    </label>
@@ -250,14 +254,21 @@ if (window.matchMedia('(max-width: 600px)').matches) setCollapsed(true);
 // external feed (City ArcGIS `CLOSURE_DETOUR` etc.), so it must not be
 // interpreted as markup.
 function buildClosurePopup(props) {
-  const when = props.calgary_temporal_status === 'FUTURE'
-    ? `Starts ${props.start_date || 'date TBD'}`
-    : `Since ${props.start_date || 'unknown'}${props.end_date ? ' — expected until ' + props.end_date : ''}`;
+  const fmt = iso => new Date(iso).toLocaleString('en-US', { timeZone: CITY.timezone,
+    weekday: 'short', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
+  const future = props.calgary_temporal_status === 'FUTURE';
+  const when = (props.window_start_utc && props.window_end_utc)
+    ? (future ? `Starts ${fmt(props.window_start_utc)} — until ${fmt(props.window_end_utc)}`
+              : `Now — until ${fmt(props.window_end_utc)}`)
+    : future
+      ? `Starts ${props.start_date || 'date TBD'}`
+      : `Since ${props.start_date || 'unknown'}${props.end_date ? ' — expected until ' + props.end_date : ''}`;
 
   const root = document.createElement('div');
 
   const heading = document.createElement('strong');
-  heading.textContent = props.status === 'detour' ? 'Detour' : 'Closed';
+  heading.textContent = props.status === 'detour' ? 'Detour'
+    : props.status === 'reduced' ? 'Lane restriction (street may still be passable)' : 'Closed';
   root.appendChild(heading);
 
   root.appendChild(document.createElement('br'));
@@ -318,7 +329,8 @@ function wireToggle(checkboxId, layerIds) {
   return () => setVis(layerIds, cb.checked);
 }
 
-const CLOSURE_LAYERS = ['closures-current', 'closures-future', 'closures-detour'];
+const CLOSURE_LAYERS = ['closures-current', 'closures-future', 'closures-detour',
+                        'closures-reduced-current', 'closures-reduced-future'];
 
 let planMode = false, pts = [], markers = [];
 let closuresData = null;   // set once closures load
@@ -332,6 +344,7 @@ map.on('load', async () => {
     const r = await fetch(CITY.dataDir + '/closures.geojson');
     if (!r.ok) throw new Error('closures HTTP ' + r.status);
     const closures = await r.json();
+    refreshTemporal(closures);   // live CURRENT/FUTURE/PAST from the UTC window
     showUpdated(closures.generated);
     document.getElementById('scope-note').textContent = closures.scope_note || '';
     closuresData = closures;
@@ -353,6 +366,22 @@ map.on('load', async () => {
   map.addLayer({ id: 'closures-detour', type: 'line', source: 'closures',
     filter: ['==', ['get', 'status'], 'detour'],
     paint: { 'line-color': '#7c3aed', 'line-width': 3, 'line-dasharray': [2, 1]  } });
+
+  // Lane restrictions: amber, drawn under the red full closures
+  map.addLayer({ id: 'closures-reduced-current', type: 'line', source: 'closures',
+    filter: ['all', ['==', ['get', 'status'], 'reduced'], ['==', ['get', 'calgary_temporal_status'], 'CURRENT']],
+    paint: { 'line-color': '#f59e0b', 'line-width': 3 } }, 'closures-current');
+  map.addLayer({ id: 'closures-reduced-future', type: 'line', source: 'closures',
+    filter: ['all', ['==', ['get', 'status'], 'reduced'], ['==', ['get', 'calgary_temporal_status'], 'FUTURE']],
+    paint: { 'line-color': '#f59e0b', 'line-width': 3, 'line-opacity': 0.5, 'line-dasharray': [2, 2] } }, 'closures-current');
+  wireToggle('t-reduced', ['closures-reduced-current', 'closures-reduced-future']);
+  if (!closuresData.features.some(f => f.properties.status === 'reduced'))
+    document.getElementById('row-reduced').style.display = 'none';   // e.g. Calgary
+
+  // Re-evaluate current/upcoming against the clock every minute
+  setInterval(() => {
+    if (refreshTemporal(closuresData)) map.getSource('closures').setData(closuresData);
+  }, 60000);
 
   wireToggle('t-current', ['closures-current']);
   wireToggle('t-future', ['closures-future']);
@@ -448,8 +477,14 @@ map.on('load', async () => {
   map.addLayer({ id: 'route-line', type: 'line', source: 'route',
     paint: { 'line-color': '#1a73e8', 'line-width': 5, 'line-opacity': 0.85 } });
   map.addLayer({ id: 'route-hits', type: 'line', source: 'route-hits',
+    filter: ['!', ['get', 'possible']],
     paint: { 'line-color': ['case', ['get', 'lapsed'], '#f29900', '#d93025'],
             'line-width': 9, 'line-opacity': 0.9 } });
+  // Lane restrictions: dashed amber, so they read as "maybe", not "blocked"
+  map.addLayer({ id: 'route-hits-possible', type: 'line', source: 'route-hits',
+    filter: ['get', 'possible'],
+    paint: { 'line-color': '#f59e0b', 'line-width': 9, 'line-opacity': 0.9,
+            'line-dasharray': [1.5, 1.5] } });
 
   const banner = document.getElementById('route-banner');   // add a <div> in the HTML
 
@@ -491,24 +526,37 @@ map.on('load', async () => {
         type: 'FeatureCollection',
         features: hits.map(h => ({
           ...h.feature,
-          properties: { ...h.feature.properties, lapsed: h.info.pastEndDate },
+          properties: { ...h.feature.properties, lapsed: h.info.pastEndDate, possible: h.info.kind === 'reduced' },
         })),
       });
 
       // one closure can span several features, so group by name
-      const byName = new Map();
+      const closedByName = new Map(), possibleNames = new Set();
       for (const h of hits) {
-        byName.set(h.info.name, (byName.get(h.info.name) || false) || h.info.pastEndDate);
+        if (h.info.kind === 'closed') {
+          closedByName.set(h.info.name, (closedByName.get(h.info.name) || false) || h.info.pastEndDate);
+        } else {
+          possibleNames.add(h.info.name);
+        }
       }
-      const parts = [...byName].map(([name, lapsed]) =>
+      for (const n of closedByName.keys()) possibleNames.delete(n);   // already warned as a closure
+      const parts = [...closedByName].map(([name, lapsed]) =>
         lapsed ? `${name} ⚑ past listed end date, may be cleared` : name);
+      const maybe = [...possibleNames];
 
       const stale = (Date.now() - new Date(generatedAt)) > 6 * 3600e3;
       const km = (route.properties.summary.distance / 1000).toFixed(1);
+      const maybeText = `${maybe.length} lane restriction${maybe.length > 1 ? 's' : ''} ` +
+        `(${maybe.join('; ')}) — the street may still be passable`;
 
-      banner.textContent = parts.length
-        ? `⚠ ${km} km route crosses ${parts.length} closure${parts.length > 1 ? 's' : ''}: ${parts.join('; ')}`
-        : `No known closures on this ${km} km route` + (stale ? ' (closure data may be stale)' : '');
+      if (parts.length) {
+        banner.textContent = `⚠ ${km} km route crosses ${parts.length} closure${parts.length > 1 ? 's' : ''}: ${parts.join('; ')}` +
+          (maybe.length ? `. It also passes ${maybeText}` : '');
+      } else if (maybe.length) {
+        banner.textContent = `Heads up: your ${km} km route may be affected by ${maybeText}.`;
+      } else {
+        banner.textContent = `No known closures on this ${km} km route` + (stale ? ' (closure data may be stale)' : '');
+      }
       // ===== NEW BLOCK ENDS HERE =====
 
     } catch (err) {
