@@ -1,0 +1,148 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Gully Erosion on Lakes Huron and Erie | Jess Zhang</title>
+<meta name="description" content="Workflow, results and uncertainty method from a B.S. thesis quantifying coastal gully growth and sediment discharge from multi-temporal imagery and UAV-derived DEMs.">
+<style>
+:root{
+  --bg:#f1f4f4; --ink:#12303b; --muted:#4d6670; --line:#c6d3d6; --panel:#ffffff;
+  --water:#1c7c8c; --sed:#8a6f4e; --soft:#e3ecee;
+}
+@media (prefers-color-scheme: dark){
+  :root{--bg:#0e1b21; --ink:#e4eef0; --muted:#9ab2ba; --line:#2a4350; --panel:#142630; --water:#5cc0cf; --sed:#d3b184; --soft:#1a303a;}
+}
+*{box-sizing:border-box}
+html{-webkit-text-size-adjust:100%}
+body{margin:0;background:var(--bg);color:var(--ink);font:17px/1.6 Georgia,"Times New Roman",serif}
+.wrap{max-width:860px;margin:0 auto;padding:0 20px}
+header{padding:56px 0 28px;border-bottom:1px solid var(--line)}
+h1{font:700 clamp(30px,6vw,48px)/1.1 Georgia,serif;margin:0 0 14px;letter-spacing:-.01em}
+.lede{font-size:19px;max-width:62ch;margin:0 0 18px}
+.meta{font:15px/1.5 system-ui,-apple-system,"Segoe UI",sans-serif;color:var(--muted);margin:0}
+.meta a{color:var(--water)}
+section{padding:36px 0;border-bottom:1px solid var(--line)}
+h2{font:700 24px/1.25 Georgia,serif;margin:0 0 14px}
+p{margin:0 0 14px;max-width:68ch}
+.stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:14px;margin:6px 0 0}
+.stat{background:var(--panel);border:1px solid var(--line);padding:16px}
+.stat b{display:block;font:700 28px/1.1 Georgia,serif;color:var(--water)}
+.stat span{font:14px/1.4 system-ui,sans-serif;color:var(--muted)}
+figure{margin:18px 0 0;background:var(--panel);border:1px solid var(--line);padding:14px}
+figcaption{font:14px/1.5 system-ui,sans-serif;color:var(--muted);margin-top:8px}
+svg{width:100%;height:auto;display:block}
+svg text{font-family:system-ui,-apple-system,"Segoe UI",sans-serif}
+.tablewrap{overflow-x:auto}
+table{border-collapse:collapse;width:100%;font:15px/1.4 system-ui,sans-serif;background:var(--panel)}
+th,td{border:1px solid var(--line);padding:9px 12px;text-align:right}
+th:first-child,td:first-child{text-align:left}
+thead th{background:var(--soft)}
+ol.steps{padding-left:22px;max-width:68ch}
+ol.steps li{margin-bottom:12px}
+.btns{display:flex;flex-wrap:wrap;gap:12px;margin-top:6px}
+.btn{font:600 15px system-ui,sans-serif;text-decoration:none;padding:10px 16px;border:1.5px solid var(--water);color:var(--water);background:transparent}
+.btn.primary{background:var(--water);color:var(--bg)}
+.btn:focus-visible,a:focus-visible{outline:3px solid var(--sed);outline-offset:2px}
+footer{padding:28px 0 56px;font:14px/1.5 system-ui,sans-serif;color:var(--muted)}
+</style>
+</head>
+<body>
+<div class="wrap">
+<header>
+  <h1>Gully Erosion on Lakes Huron and Erie</h1>
+  <p class="lede">How fast are coastal gullies growing, and how much sediment do they put into the lake? I answered this by combining 90 years of aerial imagery with UAV-built elevation models, and by putting error bars on every number.</p>
+  <p class="meta">Jess Zhang · B.S. Thesis, Earth Sciences, University of Waterloo · Presented at senior thesis poster day · Funded by the Lake Huron Coastal Centre</p>
+  <div class="btns" style="margin-top:18px">
+    <a class="btn primary" href="Poster_Jess_Zhang_pdf_version.pdf">Read the poster (PDF)</a>
+  </div>
+</header>
+
+<section>
+  <h2>Results at a glance</h2>
+  <div class="stats">
+    <div class="stat"><b>21</b><span>gullies digitized across 8 imagery years (1955–2020); 20 with UAV-derived DEMs</span></div>
+    <div class="stat"><b>4,403 m²/yr</b><span>areal growth of the Port Burwell gully (Lake Erie), the fastest measured</span></div>
+    <div class="stat"><b>27,669 m³/yr</b><span>sediment from Port Burwell, about 2% of the regional littoral budget</span></div>
+    <div class="stat"><b>127 m²/yr</b><span>fastest-growing Lake Huron gully (Gully-15)</span></div>
+  </div>
+</section>
+
+<section>
+  <h2>Workflow</h2>
+  <p>Two data streams, one set of rates. Historical imagery gives area over time. Fresh drone surveys give volume. Both feed a sediment budget.</p>
+  <figure>
+    <svg viewBox="0 0 780 330" role="img" aria-labelledby="wf-t wf-d">
+      <title id="wf-t">Thesis workflow</title>
+      <desc id="wf-d">Historical imagery is digitized into gully areas and ages, producing areal expansion rates. UAV surveys produce DEMs, then sediment volumes, then discharge rates. Both feed an improved sediment budget.</desc>
+      <defs>
+        <marker id="ar" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0L10 5L0 10z" fill="currentColor" style="color:#4d6670"/></marker>
+      </defs>
+      <g fill="none" stroke="#4d6670" stroke-width="1.6" marker-end="url(#ar)">
+        <path d="M150 70H190"/><path d="M340 70H380"/><path d="M530 70H570"/>
+        <path d="M150 250H190"/><path d="M340 250H380"/><path d="M530 250H570"/>
+        <path d="M265 100V140" marker-end="none"/>
+        <path d="M655 100V150L700 150V150" marker-end="none"/>
+        <path d="M655 220V170L700 170" marker-end="none"/>
+      </g>
+      <g font-size="13" text-anchor="middle" fill="#12303b">
+        <rect x="20" y="40" width="130" height="60" fill="#e3ecee" stroke="#1c7c8c"/><text x="85" y="66">Aerial &amp; satellite</text><text x="85" y="84">imagery, 1931–2020</text>
+        <rect x="190" y="40" width="150" height="60" fill="#e3ecee" stroke="#1c7c8c"/><text x="265" y="66">Manual digitization</text><text x="265" y="84">in ArcGIS Pro</text>
+        <rect x="380" y="40" width="150" height="60" fill="#e3ecee" stroke="#1c7c8c"/><text x="455" y="66">Gully areas by year</text><text x="455" y="84">+ error polygons</text>
+        <rect x="570" y="40" width="170" height="60" fill="#e3ecee" stroke="#1c7c8c"/><text x="655" y="66">Regression: areal</text><text x="655" y="84">growth + initiation year</text>
+
+        <rect x="190" y="140" width="150" height="50" fill="#ffffff" stroke="#8a6f4e" stroke-dasharray="4 3"/><text x="265" y="160">Georeference to 2020</text><text x="265" y="177">SWOOP (RMSE)</text>
+
+        <rect x="20" y="220" width="130" height="60" fill="#efe6d8" stroke="#8a6f4e"/><text x="85" y="246">RTK-UAV surveys</text><text x="85" y="264">+ surveyed GCPs</text>
+        <rect x="190" y="220" width="150" height="60" fill="#efe6d8" stroke="#8a6f4e"/><text x="265" y="246">DEMs via Structure</text><text x="265" y="264">from Motion (Pix4D)</text>
+        <rect x="380" y="220" width="150" height="60" fill="#efe6d8" stroke="#8a6f4e"/><text x="455" y="246">Gully volumes</text><text x="455" y="264">(ArcGIS Surface Volume)</text>
+        <rect x="570" y="220" width="170" height="60" fill="#efe6d8" stroke="#8a6f4e"/><text x="655" y="246">Volume ÷ years since</text><text x="655" y="264">initiation = discharge</text>
+
+        <rect x="700" y="135" width="70" height="50" fill="#1c7c8c"/><text x="735" y="157" fill="#ffffff">Sediment</text><text x="735" y="173" fill="#ffffff">budget</text>
+      </g>
+    </svg>
+    <figcaption>Blue lane: area from historical imagery. Tan lane: volume from UAV elevation models. Initiation years from the area regression set the time base for the volume rates.</figcaption>
+  </figure>
+</section>
+
+<section>
+  <h2>Method, step by step</h2>
+  <ol class="steps">
+    <li><b>Digitize history.</b> I traced gully outlines by hand in ArcGIS Pro for 1955, 1966, 1978, 1980, 2006, 2010, 2015 and 2020, after georeferencing every image to the 2020 SWOOP imagery.</li>
+    <li><b>Fit growth rates.</b> A linear fit of area against year (SLOPE in Excel) gave annual areal growth. Projecting the fit back to zero area (INTERCEPT) estimated each gully's initiation year.</li>
+    <li><b>Survey by drone.</b> An Autel EVO II V3 RTK flew programmed plan-view surveys at 70 to 80% overlap, 60 m above the bluff, with oblique photos added by hand. White 30 cm GCPs, surveyed with an Emlid Reach RS2, were laid every 10 to 100 m.</li>
+    <li><b>Build elevation models.</b> Pix4D Structure from Motion produced DEMs. Gully volumes came from the ArcGIS Surface Volume tool.</li>
+    <li><b>Convert to rates.</b> Current volume divided by years since initiation gave average annual sediment discharge. I also expressed results as parking spots and garbage trucks per year so planners could picture them.</li>
+  </ol>
+</section>
+
+<section>
+  <h2>Preliminary results</h2>
+  <div class="tablewrap">
+  <table>
+    <thead><tr><th>Gully</th><th>Area growth (m²/yr)</th><th>≈ parking spots/yr</th><th>Erosion (m³/yr)</th><th>≈ garbage trucks/yr</th></tr></thead>
+    <tbody>
+      <tr><td>Port Burwell (Erie)</td><td>4,403</td><td>367</td><td>27,669</td><td>1,537</td></tr>
+      <tr><td>Gully-15 (Huron)</td><td>127</td><td>11</td><td>1,287</td><td>71</td></tr>
+      <tr><td>Gully-11 (Huron)</td><td>13</td><td>1</td><td>115</td><td>6</td></tr>
+      <tr><td>Average, all gullies</td><td>40</td><td>3</td><td>413</td><td>23</td></tr>
+    </tbody>
+  </table>
+  </div>
+  <p style="margin-top:16px">Large gullies grow faster in absolute terms. Relative to their size, small gullies grow faster. Growth is highest early and tapers, so new large gullies deserve the closest monitoring.</p>
+</section>
+
+<section>
+  <h2>How I handled uncertainty</h2>
+  <p>Every imagery year has its own positional error, so I combined two sources, following Hapke and Reid (2007). Georeferencing error came from the RMSE against the 2020 reference. Digitization error came from each dataset's resolution and an estimated 1 to 3 pixel user error, larger for finer imagery.</p>
+  <p>To turn that into an error on area, I buffered each gully outline outward and inward by the combined uncertainty. The difference between the two polygons is the areal error for that gully and year.</p>
+  <p>Limits worth knowing: two remote sites had GPS dropouts and dense canopy, so a DEM there would have mapped vegetation, not ground, and those gullies were studied from imagery only. One gully has since been remediated.</p>
+</section>
+
+<footer>
+  <p>Jess Zhang · jess.jm.zhang@gmail.com · <a href="https://github.com/jessikamessika/GroundTruthMaps" style="color:var(--water)">Cycling-closure map project</a></p>
+  <p>References: Hapke &amp; Reid (2007); O'Rourke et al. (2025), J. Great Lakes Research; Burkard &amp; Kostaschuk (1995), Geomorphology. Full list on the poster.</p>
+</footer>
+</div>
+</body>
+</html>
