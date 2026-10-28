@@ -7,7 +7,7 @@
 <meta name="theme-color" content="#1a1a1a">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="mobile-web-app-capable" content="yes">
-<link rel="manifest" href="manifest-sf.webmanifest">
+<link rel="manifest" href="manifest.webmanifest">
 <link rel="icon" href="icon-192.png">
 <link rel="apple-touch-icon" href="icon-192.png">
 <link rel="stylesheet" href="vendor/maplibre-gl.css">
@@ -187,8 +187,8 @@ const CITIES = {
               dataDir: '../data/sf', network: false,
               attribution: 'SFMTA Temporary Street Closures via DataSF' }
 };
-const CITY = CITIES[new URLSearchParams(location.search).get('city')] || CITIES.sf;
-if (CITY === CITIES.calgary) document.querySelector('link[rel="manifest"]').href = 'manifest.webmanifest';
+const CITY = CITIES[new URLSearchParams(location.search).get('city')] || CITIES.calgary;
+if (CITY === CITIES.sf) document.querySelector('link[rel="manifest"]').href = 'manifest-sf.webmanifest';
 document.title = CITY.name + ' Cycling Closures Map';
 document.getElementById('welcome-title').textContent = CITY.name + ' Cycling Closures Map';
 
@@ -203,6 +203,7 @@ const map = new maplibregl.Map({
   style: 'https://tiles.openfreemap.org/styles/liberty',
   center: CITY.center,
   zoom: CITY.zoom,
+  maxPitch: 80,
   attributionControl: {
     compact: true,
     customAttribution:
@@ -211,12 +212,32 @@ const map = new maplibregl.Map({
   }
 });
 
-map.addControl(new maplibregl.NavigationControl({ showCompass: false }), 'top-right');
+map.addControl(new maplibregl.NavigationControl({showCompass: true, visualizePitch: true }), 'top-right');
 map.addControl(new maplibregl.GeolocateControl({
   positionOptions: { enableHighAccuracy: true },
   trackUserLocation: true,
   showUserLocation: true
 }), 'top-right');
+class Toggle3D { // button for 3D
+  onAdd() {
+    this.el = document.createElement('div');
+    this.el.className = 'maplibregl-ctrl maplibregl-ctrl-group';
+    const mk = (label, fn) => {
+      const b = document.createElement('button');
+      b.type = 'button'; b.textContent = label; b.onclick = fn;
+      this.el.appendChild(b); return b;
+    };
+    mk('3D', () => set3D(!is3D));
+    let sat = false;
+    mk('🛰', () => {
+      sat = !sat;
+      map.setLayoutProperty('satellite', 'visibility', sat ? 'visible' : 'none');
+    });
+    return this.el;
+  }
+  onRemove() { this.el.remove(); }
+}
+map.addControl(new Toggle3D(), 'top-right');
 
 // Collapsible panel; start collapsed on small screens so the map is visible.
 const panel = document.getElementById('panel');
@@ -336,8 +357,142 @@ let planMode = false, pts = [], markers = [];
 let closuresData = null;   // set once closures load
 let generatedAt = null;    // the `generated` timestamp
 
+let is3D = false;
+const BUILDING_LAYER = 'building-3d';
+
+function set3D(on) {
+  try {
+    map.setTerrain(on ? { source: 'dem', exaggeration: 1.5 } : null);
+    map.once('idle', () => map.easeTo({ pitch: on ? 65 : 0, duration: 800 }));
+    is3D = on;
+  } catch (e) { console.error('3D toggle failed', e); }
+
+  // Buildings: separate try/catch so a building failure can't undo the terrain toggle
+  try {
+    if (map.getLayer(BUILDING_LAYER)) {
+      map.setLayoutProperty(BUILDING_LAYER, 'visibility', on ? 'visible' : 'none');
+    }
+  } catch (e) { console.error('Building toggle failed', e); }
+
+  // Closure walls: own try/catch, same reason as buildings
+  try {
+    if (map.getLayer(WALL_LAYER)) {
+      map.setLayoutProperty(WALL_LAYER, 'visibility', on ? 'visible' : 'none');
+    }
+  } catch (e) { console.error('Wall toggle failed', e); }
+}
+
+// ===== Closure walls (3D barrier walls) =====
+const WALL_SOURCE = 'closure-walls';
+const WALL_LAYER = 'closure-walls-3d';
+const WALL_BUFFER_M = 6;          // narrower than CLOSURE_BUFFER_M (15) so it reads as a wall, not a slab
+const WALL_HEIGHT_CURRENT = 100;   // metres
+const WALL_HEIGHT_FUTURE = 10;
+
+// Full closures only (status 'closed'), current or future. PAST, detour and reduced are skipped.
+function buildWallData(closures) {
+  const out = [];
+  for (const f of closures.features) {
+    try {                                     // one bad geometry must not drop every wall
+      const p = f.properties || {};
+      const info = closureInfo(p);
+      if (info.kind !== 'closed') continue;
+      const t = temporalStatus(p);
+      if (t === 'PAST') continue;
+      const poly = turf.buffer(f, WALL_BUFFER_M / 1000, { units: 'kilometers' });
+      if (!poly || !poly.geometry) continue;
+      const future = t === 'FUTURE';
+      out.push({
+        type: 'Feature',
+        geometry: poly.geometry,
+        properties: {
+          ...p,                       // status, detour_note, start/end dates, window fields: what the popup reads
+          name: info.name,
+          future,
+          lapsed: !future && info.pastEndDate,
+          h: future ? WALL_HEIGHT_FUTURE : WALL_HEIGHT_CURRENT
+        }
+      });
+    } catch (e) { console.warn('wall skipped', e); }
+  }
+  return { type: 'FeatureCollection', features: out };
+}
+
+// Adds the wall source + layer. Call once, after closures have loaded.
+function initClosureWalls() {
+  try {
+    map.addSource(WALL_SOURCE, { type: 'geojson', data: buildWallData(closuresData) });
+    map.addLayer({
+      id: WALL_LAYER, type: 'fill-extrusion', source: WALL_SOURCE,
+      layout: { visibility: is3D ? 'visible' : 'none' },
+      paint: {
+        'fill-extrusion-height': ['get', 'h'],
+        'fill-extrusion-base': 0,
+        'fill-extrusion-opacity': 0.55,
+        'fill-extrusion-color': ['case',
+          ['get', 'lapsed'], '#f59e0b',      // past listed end date: amber
+          ['get', 'future'], '#f4a4b4',      // upcoming: muted pink
+          '#e11d48']                         // closed now: red
+      }
+    });
+  } catch (e) { console.error('Closure walls init failed', e); }
+}
+
+// Rebuild wall data from the current closuresData (after a temporal change)
+function updateWalls() {
+  try {
+    const src = map.getSource(WALL_SOURCE);
+    if (src && closuresData) src.setData(buildWallData(closuresData));
+  } catch (e) { console.error('Wall update failed', e); }
+}
+
+function init3D(map) {
+  try {
+    map.addSource('dem', {
+      type: 'raster-dem',
+      tiles: ['https://s3.amazonaws.com/elevation-tiles-prod/terrarium/{z}/{x}/{y}.png'],
+      encoding: 'terrarium',
+      tileSize: 256,
+      maxzoom: 15,
+      attribution: 'Terrain: Mapzen / AWS Terrain Tiles'
+    });
+    map.addSource('satellite', {
+      type: 'raster',
+      tiles: ['https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}'],
+      tileSize: 256,
+      maxzoom: 19,
+      attribution: 'Imagery © Esri, Maxar, Earthstar Geographics'
+    });
+    map.addLayer({
+      id: 'satellite', type: 'raster', source: 'satellite',
+      layout: { visibility: 'none' }
+    });
+    // map.setSky({
+    //   'sky-color': '#7ab8f5',
+    //   'horizon-color': '#dcebf7',
+    //   'fog-color': '#e8eef4',
+    //   'sky-horizon-blend': 0.5,
+    //   'horizon-fog-blend': 0.5,
+    //   'fog-ground-blend': 0.3,
+    //   'atmosphere-blend': 0.8
+    // });
+  } catch (e) { console.error('3D init failed', e); }
+
+  // Buildings: hidden until 3D mode, and moved above the satellite layer
+  try {
+    if (map.getLayer(BUILDING_LAYER)) {
+      map.moveLayer(BUILDING_LAYER);   // no beforeId = top of the stack so far
+      map.setLayoutProperty(BUILDING_LAYER, 'visibility', 'none');
+    } else {
+      console.warn('building-3d layer not found; skipping 3D buildings');
+    }
+  } catch (e) { console.error('3D buildings init failed', e); }
+}
+
 map.on('load', async () => {
   const loading = document.getElementById('loading');
+  // 0. 3D
+  init3D(map);   // adds DEM + satellite source/layer first
 
   // 1. Closures first: small, and the point of the app
   try {
@@ -380,12 +535,16 @@ map.on('load', async () => {
 
   // Re-evaluate current/upcoming against the clock every minute
   setInterval(() => {
-    if (refreshTemporal(closuresData)) map.getSource('closures').setData(closuresData);
+    if (refreshTemporal(closuresData)) {
+      map.getSource('closures').setData(closuresData);
+      updateWalls();
+    }
   }, 60000);
 
   wireToggle('t-current', ['closures-current']);
   wireToggle('t-future', ['closures-future']);
   wireToggle('t-detour', ['closures-detour']);
+  initClosureWalls();
   const tNetwork = document.getElementById('t-network');
   const tUnconfirmed = document.getElementById('t-unconfirmed');
 
@@ -402,9 +561,11 @@ map.on('load', async () => {
   // pixel, since closure lines are thin. Only visible layers return features.
   const HIT = 10;
   function closuresNear(point) {
+    // Only query the wall layer if it exists; querying a missing layer makes the whole call fail
+    const layers = map.getLayer(WALL_LAYER) ? [...CLOSURE_LAYERS, WALL_LAYER] : CLOSURE_LAYERS;
     return map.queryRenderedFeatures(
       [[point.x - HIT, point.y - HIT], [point.x + HIT, point.y + HIT]],
-      { layers: CLOSURE_LAYERS }
+      { layers }
     );
   }
 
@@ -437,9 +598,13 @@ map.on('load', async () => {
     if (planMode) return;
     const hits = closuresNear(e.point);
     if (!hits.length) return;
+    // A wall under the tap wins, so tapping a wall doesn't open the detour behind it.
+    // Walls are polygons, so nearestFeature (which measures line segments) only applies to line hits.
+    const wallHit = hits.find(f => f.layer && f.layer.id === WALL_LAYER);
+    const pick = wallHit || nearestFeature(e.point, hits);
     new maplibregl.Popup({ maxWidth: '240px' })
       .setLngLat(e.lngLat)
-      .setDOMContent(buildClosurePopup(nearestFeature(e.point, hits).properties))
+      .setDOMContent(buildClosurePopup(pick.properties))
       .addTo(map);
   });
 
@@ -461,7 +626,7 @@ map.on('load', async () => {
         paint: { 'line-color': '#7a8ca5', 'line-width': 1.5, 'line-opacity': 0.7 } }, 'closures-current');
       map.addLayer({ id: 'network-unconfirmed', type: 'line', source: 'network',
         filter: ['!=', ['get', 'bicycle_access'], 'designated'],
-        paint: { 'line-color': '#7a8ca5', 'line-width': 1.2, 'line-opacity': 0.4 } }, 'closures-current');
+        paint: { 'line-color': '#7a8ca5', 'line-width': 1, 'line-opacity': 0.2 } }, 'closures-current');
       updateNetworkVis();   // honor checkboxes toggled while loading
     } catch (err) {
       console.error(err);
@@ -475,7 +640,7 @@ map.on('load', async () => {
   map.addSource('route', { type: 'geojson', data: { type: 'FeatureCollection', features: [] } });
   map.addSource('route-hits', { type: 'geojson', data: { type: 'FeatureCollection', features: [] } });
   map.addLayer({ id: 'route-line', type: 'line', source: 'route',
-    paint: { 'line-color': '#1a73e8', 'line-width': 5, 'line-opacity': 0.85 } });
+    paint: { 'line-color': '#1a73e8', 'line-width': 5.7, 'line-opacity': 1 } });
   map.addLayer({ id: 'route-hits', type: 'line', source: 'route-hits',
     filter: ['!', ['get', 'possible']],
     paint: { 'line-color': ['case', ['get', 'lapsed'], '#f29900', '#d93025'],
