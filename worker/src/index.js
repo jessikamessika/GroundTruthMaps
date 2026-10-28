@@ -20,6 +20,29 @@ function validCoords(c) {
     inAnyBox(p));
 }
 
+const MAX_AVOID_POLYGONS = 40;
+const MAX_AVOID_VERTICES = 4000;
+
+// Optional field. If present it must be a MultiPolygon, inside a supported city, within size caps.
+function validAvoid(a) {
+  if (a === undefined || a === null) return true;
+  if (a.type !== 'MultiPolygon' || !Array.isArray(a.coordinates)) return false;
+  if (a.coordinates.length === 0 || a.coordinates.length > MAX_AVOID_POLYGONS) return false;
+  let vertices = 0;
+  for (const poly of a.coordinates) {
+    if (!Array.isArray(poly) || poly.length === 0) return false;
+    for (const ring of poly) {
+      if (!Array.isArray(ring) || ring.length < 4) return false;
+      for (const p of ring) {
+        if (!Array.isArray(p) || p.length !== 2 || !p.every(Number.isFinite) || !inAnyBox(p)) return false;
+        vertices++;
+      }
+      if (vertices > MAX_AVOID_VERTICES) return false;
+    }
+  }
+  return true;
+}
+
 export default {
   async fetch(request, env) {
     const origin = request.headers.get('Origin') || '';
@@ -37,17 +60,22 @@ export default {
     let body;
     try { body = await request.json(); } catch { return err(400, 'Invalid JSON', cors); }
     if (!validCoords(body.coordinates)) return err(400, 'Coordinates must be two [lng, lat] points in a supported city', cors);
-
+    if (!validAvoid(body.avoid_polygons)) return err(400, 'avoid_polygons must be a MultiPolygon in a supported city, within size limits', cors);
+    
     // Rate limit: one shared bucket protects the ORS allowance
     const { success } = await env.ROUTE_LIMITER.limit({ key: 'route' });
     if (!success) return err(429, 'Route service is busy. Please try again in a minute.', cors);
+
+    const avoid = body.avoid_polygons || null;
+    const orsBody = { coordinates: body.coordinates, radiuses: [500, 500] };
+    if (avoid) orsBody.options = { avoid_polygons: avoid };
 
     let upstream;
     try {
       upstream = await fetch(ORS, {
         method: 'POST',
         headers: { 'Authorization': env.ORS_KEY, 'Content-Type': 'application/json' },
-        body: JSON.stringify({ coordinates: body.coordinates, radiuses: [500, 500] }),
+        body: JSON.stringify(orsBody),
       });
     } catch (e) {
       console.error('Upstream fetch threw:', String(e));
@@ -56,7 +84,13 @@ export default {
 
     const text = await upstream.text();
     if (!upstream.ok) console.error('ORS responded', upstream.status, text.slice(0, 300));
-    return new Response(text, {
+
+    // On success, tell the client whether avoidance was actually sent. Errors pass through untouched.
+    let out = text;
+    if (upstream.ok) {
+      try { out = JSON.stringify({ ...JSON.parse(text), avoid_applied: Boolean(avoid) }); } catch (_) {}
+    }
+    return new Response(out, {
       status: upstream.status,
       headers: { ...cors, 'Content-Type': 'application/json' },
     });
