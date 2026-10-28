@@ -728,6 +728,8 @@ map.on('load', async () => {
       } else {
         banner.textContent = `No known closures on this ${km} km route` + (stale ? ' (closure data may be stale)' : '');
       }
+      const prefix = safeRouteMessage(result);
+      if (prefix) banner.textContent = prefix + ' ' + banner.textContent;
       // ===== NEW BLOCK ENDS HERE =====
 
     } catch (err) {
