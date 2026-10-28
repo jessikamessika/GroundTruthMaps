@@ -676,7 +676,13 @@ map.on('load', async () => {
 
     banner.textContent = 'Routing…';
     try {
-      const route = await fetchPlainRoute(pts[0], pts[1]);
+      let route, result = null;
+      if (closuresData) {
+        result = await planSafeRoutes(pts[0], pts[1], closuresData);
+        route = result.route;
+      } else {
+        route = await fetchPlainRoute(pts[0], pts[1]);
+      }
       map.getSource('route').setData(route);
 
       if (!closuresData) {                      // fail closed

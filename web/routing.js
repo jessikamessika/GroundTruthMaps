@@ -78,18 +78,123 @@ function routeCrossesClosures(route, closures) {
   return hits;
 }
 
-async function fetchPlainRoute(start, end) {   // [lng, lat] each
+async function fetchRoutes(start, end, avoidPolygons = null) {   // [lng, lat] each
+  const payload = { coordinates: [start, end] };
+  if (avoidPolygons) payload.avoid_polygons = avoidPolygons;
   const r = await fetch(PROXY_URL, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ coordinates: [start, end] }),
+    body: JSON.stringify(payload),
   });
   if (!r.ok) {
     let detail = '';
     try { detail = (await r.json()).error?.message || ''; } catch (_) {}
-    throw new Error(`Route service ${r.status} ${detail}`.trim());
+    const e = new Error(`Route service ${r.status} ${detail}`.trim());
+    e.status = r.status;
+    throw e;
   }
   const fc = await r.json();
-  if (!fc.features?.length) throw new Error('No route found');
-  return fc.features[0];
+  if (!fc.features?.length) { const e = new Error('Route service 404 No route found'); e.status = 404; throw e; }
+  return fc.features.slice(0, 3);
+}
+const fetchPlainRoute = async (start, end) => (await fetchRoutes(start, end))[0];
+
+// ---------- Avoidance routing ----------
+const AVOID_BUFFER_M = 20;                    // > CLOSURE_BUFFER_M (15)
+const AVOID_PAD = { lng: 0.03, lat: 0.02 };   // ~2 km search margin around start/end
+const MAX_AVOID_POLYGONS = 40;                // keep equal to the Worker
+const MAX_AVOID_VERTICES = 4000;
+
+const blockingHits = (route, closures) =>
+  routeCrossesClosures(route, closures).filter(h => h.info.blocking);
+
+function buildAvoidPolygons(closures, start, end, { skipLapsed = false } = {}) {
+  const box = turf.bboxPolygon([
+    Math.min(start[0], end[0]) - AVOID_PAD.lng, Math.min(start[1], end[1]) - AVOID_PAD.lat,
+    Math.max(start[0], end[0]) + AVOID_PAD.lng, Math.max(start[1], end[1]) + AVOID_PAD.lat,
+  ]);
+  const mid = turf.point([(start[0] + end[0]) / 2, (start[1] + end[1]) / 2]);
+  const found = [];
+  for (const feature of closures.features) {
+    const info = closureInfo(feature.properties || {});
+    if (!info.blocking) continue;
+    if (skipLapsed && info.pastEndDate) continue;
+    if (!turf.booleanIntersects(feature, box)) continue;
+    let buf = turf.buffer(feature, AVOID_BUFFER_M / 1000, { units: 'kilometers', steps: 4 });
+    if (!buf) continue;
+    try { buf = turf.simplify(buf, { tolerance: 0.00003, highQuality: false }); } catch (_) {}
+    found.push({ buf, d: turf.distance(turf.center(feature), mid) });
+  }
+  found.sort((a, b) => a.d - b.d);   // nearest the trip first, so truncation drops the far ones
+
+  const polys = [];
+  let vertices = 0, truncated = false;
+  for (const { buf } of found) {
+    const g = buf.geometry;
+    const parts = g.type === 'Polygon' ? [g.coordinates]
+      : g.type === 'MultiPolygon' ? g.coordinates : [];
+    for (const part of parts) {
+      const n = part.reduce((s, ring) => s + ring.length, 0);
+      if (polys.length >= MAX_AVOID_POLYGONS || vertices + n > MAX_AVOID_VERTICES) { truncated = true; continue; }
+      polys.push(part);
+      vertices += n;
+    }
+  }
+  return { polygons: polys.length ? { type: 'MultiPolygon', coordinates: polys } : null, truncated };
+}
+
+const routeKey = r => `${Math.round(r.properties?.summary?.distance || 0)}:${r.geometry?.coordinates?.length}`;
+function uniqueRoutes(list) {
+  const seen = new Set();
+  return list.filter(r => !seen.has(routeKey(r)) && seen.add(routeKey(r)));
+}
+const shortestRoute = list =>
+  list.slice().sort((a, b) => (a.properties?.summary?.distance ?? Infinity) - (b.properties?.summary?.distance ?? Infinity))[0];
+
+// status: 'clear' | 'avoided' | 'lapsed-only' | 'blocked' | 'unverified'
+// Fails closed: on 'blocked' / 'unverified' the route is the plain one and is never described as safe.
+async function planSafeRoutes(start, end, closures) {
+  const plain = await fetchRoutes(start, end);   // throws -> caller shows its normal error
+  if (blockingHits(plain[0], closures).length === 0) return { status: 'clear', route: plain[0], plain };
+
+  const cleanAlternatives = plain.filter(r => blockingHits(r, closures).length === 0);
+  const attempts = [{ skipLapsed: false, tolerateLapsed: false }, { skipLapsed: true, tolerateLapsed: true }];
+  let lastError = null;
+  for (const a of attempts) {
+    const { polygons, truncated } = buildAvoidPolygons(closures, start, end, { skipLapsed: a.skipLapsed });
+    if (!polygons) continue;
+    let avoiding;
+    try {
+      avoiding = await fetchRoutes(start, end, polygons);
+    } catch (e) {
+      lastError = e;
+      if (e.status === 404) continue;   // no route with this avoid set: try the looser one
+      break;                            // Worker/network problem: don't hammer it
+    }
+    const ok = uniqueRoutes([...cleanAlternatives, ...avoiding]).filter(r =>
+      blockingHits(r, closures).every(h => a.tolerateLapsed && h.info.pastEndDate));
+    if (ok.length) {
+      return { status: a.tolerateLapsed ? 'lapsed-only' : 'avoided', route: shortestRoute(ok), plain, truncated };
+    }
+  }
+  return lastError && lastError.status !== 404
+    ? { status: 'unverified', route: plain[0], plain, error: lastError }
+    : { status: 'blocked', route: plain[0], plain };
+}
+
+function safeRouteMessage(result) {
+  const km = r => ((r.properties?.summary?.distance || 0) / 1000).toFixed(1);
+  switch (result.status) {
+    case 'avoided':
+      return `Rerouted around current closures: ${km(result.route)} km vs ${km(result.plain[0])} km direct.`
+        + (result.truncated ? ' Some distant closures were not avoided.' : '');
+    case 'lapsed-only':
+      return 'Avoids active closures. Remaining ⚑ closures are past their listed end date and may already be cleared.';
+    case 'blocked':
+      return 'No route found that avoids all current closures. Showing the direct route; red sections are closed.';
+    case 'unverified':
+      return "Couldn't check for a closure-free route. This route may cross closures.";
+    default:
+      return '';
+  }
 }
