@@ -50,44 +50,6 @@ function closureInfo(p) {
   };
 }
 
-// Carve a closure's posted detour out of its buffer so a route that follows the
-// detour isn't treated as crossing the closure. Scoped per closure by name.
-const DETOUR_CARVE_M = 5;    // strip carved around a detour line; must exceed the City-vs-OSM offset (~3 m)
-const DETOUR_NEAR_M = 12;    // a detour belongs to a closure if it comes this close
-
-function polyDiff(a, b) {
-  try { return turf.difference(turf.featureCollection([a, b])); } catch (_) {} // turf v7
-  try { return turf.difference(a, b); } catch (_) {}                          // turf v6
-  return a; // fail closed: keep the full buffer
-}
-
-const _holeCache = new WeakMap();   // closure feature -> hole polygons
-function holesFor(feature, closures) {
-  if (_holeCache.has(feature)) return _holeCache.get(feature);
-  const holes = [];
-  const near = turf.buffer(feature, DETOUR_NEAR_M / 1000, { units: 'kilometers', steps: 4 });
-  for (const d of closures.features) {
-    const p = d.properties || {};
-    if (p.status !== 'detour') continue;
-    const t = temporalStatus(p);
-    if (t === 'PAST' || t === 'FUTURE') continue;
-    if (!near || !turf.booleanIntersects(d, near)) continue;
-    const hole = turf.buffer(d, DETOUR_CARVE_M / 1000, { units: 'kilometers', steps: 4 });
-    if (hole) holes.push(hole);
-  }
-  _holeCache.set(feature, holes);
-  return holes;
-}
-
-function carveDetour(buf, feature, closures) {
-  let out = buf;
-  for (const hole of holesFor(feature, closures)) {
-    const next = polyDiff(out, hole);
-    if (next) out = next;   // null = everything erased: keep the previous shape
-  }
-  return out;
-}
-
 // Buffer every closed/reduced feature once. Whether it counts is decided per
 // call from the live clock, so the cache never goes stale as time passes.
 let _cache = { src: null, items: [] };
@@ -98,10 +60,52 @@ function bufferedClosures(closures) {
     const st = (feature.properties || {}).status;
     if (!BLOCKING.has(st) && !POSSIBLE.has(st)) continue;
     const buf = turf.buffer(feature, CLOSURE_BUFFER_M / 1000, { units: 'kilometers' });
-    if (buf) items.push({ buf: carveDetour(buf, feature, closures), feature });
+    if (buf) items.push({ buf, feature });
   }
   _cache = { src: closures, items };
   return items;
+}
+
+const DETOUR_NEAR_M = 12;    // a detour belongs to a closure if it comes this close
+const MIN_HIT_M = 20;        // metres of route genuinely on a closure before it counts
+const ON_DETOUR_MAX_M = 8;   // beyond this from a detour line, a point isn't "following the detour"
+const SAMPLE_M = 5;
+
+function distToFeatureM(pt, f) {
+  let min = Infinity;
+  turf.flattenEach(f, part => {
+    min = Math.min(min, turf.pointToLineDistance(pt, part, { units: 'meters' }));
+  });
+  return min;
+}
+
+const _detourCand = new WeakMap();   // closure feature -> detour features within DETOUR_NEAR_M
+function detoursNear(feature, closures) {
+  if (_detourCand.has(feature)) return _detourCand.get(feature);
+  const near = turf.buffer(feature, DETOUR_NEAR_M / 1000, { units: 'kilometers', steps: 4 });
+  const list = near ? closures.features.filter(d =>
+    (d.properties || {}).status === 'detour' && turf.booleanIntersects(d, near)) : [];
+  _detourCand.set(feature, list);
+  return list;
+}
+
+// Metres of the route inside this closure's buffer that are NOT on one of its posted detours.
+function metresOnClosure(route, c, closures) {
+  const dets = detoursNear(c.feature, closures).filter(d => {
+    const t = temporalStatus(d.properties || {});
+    return t !== 'PAST' && t !== 'FUTURE';
+  });
+  const L = turf.length(route, { units: 'kilometers' });
+  let m = 0;
+  for (let d = 0; d <= L; d += SAMPLE_M / 1000) {
+    const p = turf.along(route, d, { units: 'kilometers' });
+    if (!turf.booleanPointInPolygon(p, c.buf)) continue;
+    const dC = distToFeatureM(p, c.feature);
+    let dD = Infinity;
+    for (const f of dets) dD = Math.min(dD, distToFeatureM(p, f));
+    if (!(dD < dC && dD <= ON_DETOUR_MAX_M)) m += SAMPLE_M;
+  }
+  return m;
 }
 
 // Returns [{feature, info}] for every closure or lane restriction the route
@@ -111,7 +115,10 @@ function routeCrossesClosures(route, closures) {
   for (const c of bufferedClosures(closures)) {
     const info = closureInfo(c.feature.properties || {});
     if (!info.blocking && !info.possible) continue;
-    if (turf.booleanIntersects(route, c.buf)) hits.push({ feature: c.feature, info });
+    if (!turf.booleanIntersects(route, c.buf)) continue;
+    const m = metresOnClosure(route, c, closures);
+    // a route that actually crosses the closure line always counts, even for a short stretch
+    if (m >= MIN_HIT_M || (m > 0 && turf.booleanIntersects(route, c.feature))) hits.push({ feature: c.feature, info });
   }
   return hits;
 }
@@ -161,7 +168,6 @@ function buildAvoidPolygons(closures, start, end, { skipLapsed = false } = {}) {
     let buf = turf.buffer(feature, AVOID_BUFFER_M / 1000, { units: 'kilometers', steps: 4 });
     if (!buf) continue;
     try { buf = turf.simplify(buf, { tolerance: 0.00003, highQuality: false }); } catch (_) {}
-    buf = carveDetour(buf, feature, closures);
     found.push({ buf, d: turf.distance(turf.center(feature), mid) });
   }
   found.sort((a, b) => a.d - b.d);   // nearest the trip first, so truncation drops the far ones
