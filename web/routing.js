@@ -103,7 +103,8 @@ function metresOnClosure(route, c, closures) {
     const dC = distToFeatureM(p, c.feature);
     let dD = Infinity;
     for (const f of dets) dD = Math.min(dD, distToFeatureM(p, f));
-    if (!(dD < dC && dD <= ON_DETOUR_MAX_M)) m += SAMPLE_M;
+    // <= so junction samples where detour meets closure (dD ≈ dC ≈ 0) stay exempt
+    if (!(dD <= dC && dD <= ON_DETOUR_MAX_M)) m += SAMPLE_M;
   }
   return m;
 }
@@ -117,8 +118,9 @@ function routeCrossesClosures(route, closures) {
     if (!info.blocking && !info.possible) continue;
     if (!turf.booleanIntersects(route, c.buf)) continue;
     const m = metresOnClosure(route, c, closures);
-    // a route that actually crosses the closure line always counts, even for a short stretch
-    if (m >= MIN_HIT_M || (m > 0 && turf.booleanIntersects(route, c.feature))) hits.push({ feature: c.feature, info });
+    // Metres only: City detour lines often touch/share vertices with the closure, so
+    // booleanIntersects(route, closure) is true even when the route follows the detour.
+    if (m >= MIN_HIT_M) hits.push({ feature: c.feature, info });
   }
   return hits;
 }
