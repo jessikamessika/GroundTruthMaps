@@ -52,25 +52,38 @@ function closureInfo(p) {
 
 // Carve a closure's posted detour out of its buffer so a route that follows the
 // detour isn't treated as crossing the closure. Scoped per closure by name.
-const CARVE_DETOURS = {
-  'BOW RIVER PATHWAY - 34 ST NW TO 29 ST NW': { detour: /quarry/i, radiusM: 2 },
-};
+const DETOUR_CARVE_M = 5;    // strip carved around a detour line; must exceed the City-vs-OSM offset (~3 m)
+const DETOUR_NEAR_M = 12;    // a detour belongs to a closure if it comes this close
+
 function polyDiff(a, b) {
   try { return turf.difference(turf.featureCollection([a, b])); } catch (_) {} // turf v7
   try { return turf.difference(a, b); } catch (_) {}                          // turf v6
   return a; // fail closed: keep the full buffer
 }
-function carveDetour(buf, feature, closures) {
-  const rule = CARVE_DETOURS[closureInfo(feature.properties || {}).name];
-  if (!rule) return buf;
-  let out = buf;
+
+const _holeCache = new WeakMap();   // closure feature -> hole polygons
+function holesFor(feature, closures) {
+  if (_holeCache.has(feature)) return _holeCache.get(feature);
+  const holes = [];
+  const near = turf.buffer(feature, DETOUR_NEAR_M / 1000, { units: 'kilometers', steps: 4 });
   for (const d of closures.features) {
     const p = d.properties || {};
-    if (p.status !== 'detour' || !rule.detour.test(p.detour_note || '')) continue;
-    const hole = turf.buffer(d, rule.radiusM / 1000, { units: 'kilometers', steps: 4 });
-    if (!hole) continue;
+    if (p.status !== 'detour') continue;
+    const t = temporalStatus(p);
+    if (t === 'PAST' || t === 'FUTURE') continue;
+    if (!near || !turf.booleanIntersects(d, near)) continue;
+    const hole = turf.buffer(d, DETOUR_CARVE_M / 1000, { units: 'kilometers', steps: 4 });
+    if (hole) holes.push(hole);
+  }
+  _holeCache.set(feature, holes);
+  return holes;
+}
+
+function carveDetour(buf, feature, closures) {
+  let out = buf;
+  for (const hole of holesFor(feature, closures)) {
     const next = polyDiff(out, hole);
-    if (next) out = next;
+    if (next) out = next;   // null = everything erased: keep the previous shape
   }
   return out;
 }
