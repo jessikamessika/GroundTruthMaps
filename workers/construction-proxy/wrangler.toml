@@ -1,3 +1,5 @@
    name = "construction-proxy"
    main = "index.js"
    compatibility_date = "2026-10-01"
+   # Required by `wrangler preview` (Workers Builds on non-production branches).
+   previews = {}
