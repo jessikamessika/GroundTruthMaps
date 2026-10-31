@@ -1,5 +1,9 @@
 const SRC = 'https://data.calgary.ca/resource/w8zq-79bq.json';
-const ALLOWED_ORIGINS = [/* same origins your current site allows */];
+const ALLOWED_ORIGINS = new Set([
+  'https://jessikamessika.github.io',
+  'http://127.0.0.1:8000',
+  'http://localhost:8000',
+]);
 const CACHE_SECONDS = 900;
 
 export default {

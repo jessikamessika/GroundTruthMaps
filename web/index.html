@@ -69,6 +69,19 @@
     box-shadow: 0 1px 4px rgba(0,0,0,0.25);
   }
   #loading[hidden] { display: none; }
+  /* Construction data failure pill (below the loading pill); visible even when the panel is collapsed */
+  #constr-note {
+    position: absolute; z-index: 2; left: 8px;
+    top: calc(72px + env(safe-area-inset-top));
+    background: #fef2f2; color: #7f1d1d; border: 1px solid #fecaca;
+    padding: 6px 10px; border-radius: 999px;
+    font: 12px/1.2 system-ui, sans-serif;
+  }
+  #constr-note:empty { display: none; }
+  .constr-status { display: block; font-size: 12px; color: #555; }
+  .constr-status.bad { color: #7f1d1d; font-weight: 600; }
+  .constr-desc { white-space: pre-wrap; max-height: 160px; overflow-y: auto; margin: 4px 0; }
+  .constr-note-text, .constr-foot { display: block; font-size: 12px; color: #555; margin-top: 4px; }
 
     /* Data-scope banner (SF: SFMTA-only disclaimer) */
   #scope-note {
@@ -136,6 +149,7 @@
 <div id="scope-note" role="note"></div>
 <div id="loading" hidden>Loading cycling network…</div>
 <div id="error" role="alert"></div>
+<div id="constr-note" role="status"></div>
 
 <div id="welcome" role="dialog" aria-modal="true" aria-labelledby="welcome-title" hidden>
   <div class="card">
@@ -173,6 +187,12 @@
     <label class="row">
       <input type="checkbox" id="t-detour" checked>
       <span class="swatch" style="background:radial-gradient(circle at 2px 2px,#7c3aed 1.8px,transparent 2.2px) 0 0/6px 4px repeat-x"></span> Detour    </label>
+    <label class="row" id="row-construction">
+      <input type="checkbox" id="t-construction" checked>
+      <span class="swatch" style="width:12px;height:12px;border-radius:50%;margin:0 5px;background:#0d9488;box-shadow:0 0 0 2px #fff,0 0 0 3px #0d9488"></span>
+      <span>Construction detours (City)
+        <span class="constr-status" id="constr-status">Loading…</span></span>
+    </label>
   </div>
 </div>
 <div id="route-banner"></div>
@@ -742,6 +762,132 @@ map.on('load', async () => {
   // }
 
 });
+
+// ===== Construction detours (display only) =====
+// City "Construction Detours" (w8zq-79bq) via the construction-proxy Worker, which
+// already filters to closures active now. Points only, free-text description.
+// Never fed into closuresData or routing.
+const CONSTR_URL = 'https://construction-proxy.jess-jm-zhang.workers.dev/';
+const CONSTR_SOURCE = 'construction';
+const CONSTR_LAYER = 'constr-points';
+let constrData = null;   // last valid FeatureCollection from the Worker
+
+function constrSetStatus(msg, bad) {
+  try {
+    const el = document.getElementById('constr-status');
+    el.textContent = msg;
+    el.classList.toggle('bad', !!bad);
+    document.getElementById('constr-note').textContent = bad ? msg : '';
+  } catch (e) { console.error('[construction] status update failed', e); }
+}
+
+// `start`/`end` are Calgary wall-clock strings with no timezone. Format the
+// digits as given rather than letting Date shift them to the viewer's zone.
+function constrFmtLocal(s) {
+  const m = /^(\d{4})-(\d{2})-(\d{2})(?:[T ](\d{2}):(\d{2}))?/.exec(s || '');
+  if (!m) return s || 'unknown';
+  const d = new Date(Date.UTC(+m[1], +m[2] - 1, +m[3], +(m[4] || 0), +(m[5] || 0)));
+  return d.toLocaleString('en-US', { timeZone: 'UTC', weekday: 'short', month: 'short',
+    day: 'numeric', year: 'numeric', hour: 'numeric', minute: '2-digit' });
+}
+
+function constrFmtFetched(iso) {
+  const d = new Date(iso);
+  if (!iso || isNaN(d)) return null;
+  return d.toLocaleString('en-US', { timeZone: CITY.timezone,
+    month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
+}
+
+// Popup built without innerHTML: all text comes from an external feed.
+function constrBuildPopup(props) {
+  const root = document.createElement('div');
+
+  const heading = document.createElement('strong');
+  heading.textContent = props.info || 'Construction';
+  root.appendChild(heading);
+
+  const desc = document.createElement('div');
+  desc.className = 'constr-desc';
+  desc.textContent = props.description || '';   // raw City text, unchanged
+  root.appendChild(desc);
+
+  const em = document.createElement('em');
+  em.textContent = `${constrFmtLocal(props.start)} — ${constrFmtLocal(props.end)}`;
+  root.appendChild(em);
+
+  const note = document.createElement('span');
+  note.className = 'constr-note-text';
+  note.textContent = 'Closure type not specified by the City (single-lane, full road, sidewalks etc.). Check before riding.';
+  root.appendChild(note);
+
+  const fetched = constrData && constrFmtFetched(constrData.fetched_at);
+  const foot = document.createElement('span');
+  foot.className = 'constr-foot';
+  foot.textContent = 'City of Calgary Construction Detours' + (fetched ? ` · fetched ${fetched}` : '');
+  root.appendChild(foot);
+
+  return root;
+}
+
+// Fail closed: anything other than a valid FeatureCollection with a
+// `features` array is "unavailable", never "no construction".
+async function loadConstruction() {
+  let data;
+  try {
+    const r = await fetch(CONSTR_URL);
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+    data = await r.json();
+    if (!data || !Array.isArray(data.features)) throw new Error('response has no features array');
+  } catch (err) {
+    console.error('[construction] load failed:', err);
+    constrSetStatus('Construction data unavailable', true);
+    return;
+  }
+
+  try {
+    constrData = data;
+    map.addSource(CONSTR_SOURCE, { type: 'geojson', data });
+    map.addLayer({ id: CONSTR_LAYER, type: 'circle', source: CONSTR_SOURCE,
+      paint: {
+        'circle-color': '#0d9488',
+        'circle-radius': ['interpolate', ['linear'], ['zoom'], 10, 3, 13, 5, 16, 8, 18, 11],
+        'circle-stroke-color': '#fff',
+        'circle-stroke-width': 2
+      } });
+    constrReapplyVis();   // honor the checkbox if it was toggled while loading
+
+    map.on('click', CONSTR_LAYER, (e) => {
+      try {
+        if (planMode || !e.features || !e.features.length) return;
+        new maplibregl.Popup({ maxWidth: '240px' })
+          .setLngLat(e.features[0].geometry.coordinates)
+          .setDOMContent(constrBuildPopup(e.features[0].properties))
+          .addTo(map);
+      } catch (err) { console.error('[construction] popup failed', err); }
+    });
+
+    const fetched = constrFmtFetched(data.fetched_at);
+    const n = data.features.length;
+    constrSetStatus(n
+      ? `${n} active · fetched ${fetched || 'time unknown'}`
+      : 'No active construction closures reported' + (fetched ? ` · fetched ${fetched}` : ''), false);
+  } catch (err) {
+    console.error('[construction] layer init failed:', err);
+    constrSetStatus('Construction data unavailable', true);
+  }
+}
+
+let constrReapplyVis = () => {};
+try {
+  if (CITY === CITIES.calgary) {
+    constrReapplyVis = wireToggle('t-construction', [CONSTR_LAYER]);
+    map.on('load', loadConstruction);
+  } else {
+    document.getElementById('row-construction').style.display = 'none';   // Calgary-only dataset
+  }
+} catch (err) {
+  console.error('[construction] init failed:', err);
+}
 </script>
 </body>
 </html>
