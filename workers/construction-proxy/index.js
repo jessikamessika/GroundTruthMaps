@@ -10,7 +10,7 @@ export default {
   async fetch(req) {
     const origin = req.headers.get('Origin') || '';
     const cors = {
-      'Access-Control-Allow-Origin': ALLOWED_ORIGINS.includes(origin) ? origin : 'null',
+      'Access-Control-Allow-Origin': ALLOWED_ORIGINS.has(origin) ? origin : 'null',
       'Vary': 'Origin',
     };
     const cache = caches.default;
