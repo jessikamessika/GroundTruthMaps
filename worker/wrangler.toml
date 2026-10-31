@@ -3,6 +3,11 @@ main = "src/index.js"
 compatibility_date = "2025-09-01"
 keep_vars = true
 
+# Required by `wrangler preview` (Workers Builds on non-production branches).
+# Previews inherit no bindings or secrets, so ROUTE_LIMITER and ORS_KEY are
+# absent there: preview URLs build but cannot route.
+previews = {}
+
 [[ratelimits]]
 name = "ROUTE_LIMITER"
 namespace_id = "1001"
