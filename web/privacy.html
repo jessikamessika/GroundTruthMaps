@@ -1,0 +1,151 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Privacy notice: GroundTruth Maps</title>
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#1a1a1a">
+<link rel="icon" href="icon-192.png">
+<style>
+  body {
+    margin: 0; background: #fff; color: #1a1a1a;
+    font: 15px/1.5 system-ui, sans-serif;
+  }
+  main { max-width: 640px; margin: 0 auto; padding: 24px 16px 48px; }
+  h1 { font-size: 22px; margin: 0 0 4px; }
+  h2 { font-size: 17px; margin: 28px 0 8px; }
+  p, ul { margin: 0 0 10px; }
+  ul { padding-left: 20px; }
+  li { margin-bottom: 4px; }
+  a { color: #1a73e8; }
+  .updated { color: #555; font-size: 13px; margin-bottom: 20px; }
+  .back { display: inline-block; margin-bottom: 16px; font-size: 14px; }
+
+  /* Delete-my-data form: same controls as the app's sign-up sheet */
+  #delete-form { display: flex; gap: 8px; flex-wrap: wrap; margin: 4px 0 10px; }
+  #delete-email {
+    flex: 1 1 220px; box-sizing: border-box; min-height: 44px; padding: 0 12px;
+    border: 1px solid #ccc; border-radius: 10px; font: 16px system-ui, sans-serif;
+  }
+  #delete-submit {
+    min-height: 44px; padding: 0 16px; border: 0; border-radius: 10px;
+    background: #1a1a1a; color: #fff; font: inherit; font-weight: 600; cursor: pointer;
+  }
+  #delete-submit:disabled { opacity: 0.6; }
+  #delete-msg:empty { display: none; }
+  #delete-msg { padding: 10px 12px; border-radius: 10px; background: #f3f3f3; }
+</style>
+</head>
+<body>
+<main>
+  <a class="back" href="./">← Back to the map</a>
+  <h1>Privacy notice: GroundTruth Maps</h1>
+  <p class="updated">Last updated: October 31, 2026</p>
+
+  <p><strong>Who is responsible:</strong> Zixuan Zhang, sole proprietor, 3720 36 Avenue SW,
+    Calgary, AB, Canada T3E 1C5,
+    <a href="mailto:jess.jm.zhang@gmail.com">jess.jm.zhang@gmail.com</a>.
+    Questions or requests: email me.</p>
+
+  <h2>What I collect</h2>
+  <ul>
+    <li>Your email address and how you usually travel (walk, bike, drive, transit).</li>
+    <li>The start and end points of routes you save. These are exact locations, so they can
+      reveal where you live or work.</li>
+    <li>Where you signed up (e.g. QR code at an event), timestamps, and a record of what you
+      agreed to.</li>
+    <li>Your browser remembers your email, trial dates and saved routes on your device (local
+      storage).</li>
+  </ul>
+
+  <h2>Why</h2>
+  <ul>
+    <li>To send you a confirmation when you save a route, and an alert when a new closure
+      appears on it.</li>
+    <li>If you ticked the optional box: one reminder before your free trial ends, with upgrade
+      information.</li>
+    <li>I use your data for nothing else, and I don't sell it.</li>
+  </ul>
+
+  <h2>Who can see it</h2>
+  <p>Only me. I store sign-ups in Google Sheets and Google Apps Script, so Google is my service
+    provider and your data may be stored or processed on servers outside Canada.</p>
+
+  <h2>How long I keep it</h2>
+  <p>12 months after your last activity, then I delete it. Saved routes can be removed in the
+    app, but earlier records may stay until deletion or the 12-month point.</p>
+
+  <h2>Your choices</h2>
+  <ul>
+    <li><strong>Unsubscribe / withdraw consent:</strong> use the link in any email, or email me.</li>
+    <li><strong>See, correct or delete your data:</strong> use the form below or email me. I'll
+      act within 10 business days.</li>
+    <li><strong>Complaints:</strong> you can contact the
+      <a href="https://oipc.ab.ca/" target="_blank" rel="noopener">Office of the Information and
+      Privacy Commissioner of Alberta</a>.</li>
+  </ul>
+
+  <h2 id="delete">Delete my data</h2>
+  <form id="delete-form" novalidate>
+    <input type="email" id="delete-email" required placeholder="you@example.com"
+           autocomplete="email" inputmode="email" aria-label="Email">
+    <button type="submit" id="delete-submit">Delete my data</button>
+  </form>
+  <p id="delete-msg" role="status"></p>
+  <p>Or email <a id="delete-mailto"
+    href="mailto:jess.jm.zhang@gmail.com?subject=Delete%20my%20data">jess.jm.zhang@gmail.com</a>.</p>
+</main>
+<script>
+// Same Apps Script web app as the sign-up sheet in index.html (apps-script/signup.gs).
+// A delete-request only appends a row; requests are processed by hand.
+const SIGNUP_URL = 'https://script.google.com/macros/s/AKfycbxJ7UAYDDpUQCGJ8hSNmVkuEXa4L6TofjYZ_7aqJnfvquSm4e0TfWCoDQ2z4I3DZAY/exec';
+const SRC = (new URLSearchParams(location.search).get('src') || 'privacy').slice(0, 40);
+
+const form = document.getElementById('delete-form');
+const input = document.getElementById('delete-email');
+const submit = document.getElementById('delete-submit');
+const msg = document.getElementById('delete-msg');
+
+function mailtoFor(email) {
+  const body = `Please delete all data stored for ${email}.`;
+  return 'mailto:jess.jm.zhang@gmail.com?' +
+    new URLSearchParams({ subject: 'Delete my data', body }).toString().replace(/\+/g, '%20');
+}
+
+form.addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const email = input.value.trim();
+  if (!input.checkValidity() || !email) { input.reportValidity(); return; }
+
+  submit.disabled = true;
+  submit.textContent = 'Sending…';
+  msg.textContent = '';
+  try {
+    // text/plain keeps this a "simple" request: Apps Script can't answer a CORS preflight.
+    const r = await fetch(SIGNUP_URL, {
+      method: 'POST',
+      headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+      body: JSON.stringify({ email, src: SRC, kind: 'delete-request' }),
+    });
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+    const res = await r.json();   // a script error comes back as an HTML page: json() throws
+    if (!res.ok) throw new Error(res.error || 'rejected');
+  } catch (err) {
+    console.error('[delete] send failed:', err);
+    msg.replaceChildren("Couldn't send that right now. ");
+    const a = document.createElement('a');
+    a.href = mailtoFor(email);
+    a.textContent = 'Email the request instead';
+    msg.append(a, '.');
+    return;
+  } finally {
+    submit.disabled = false;
+    submit.textContent = 'Delete my data';
+  }
+  form.reset();
+  msg.textContent = "Got it. I'll delete the data for that email within 10 business days " +
+    'and may email that address to confirm the request.';
+});
+</script>
+</body>
+</html>
