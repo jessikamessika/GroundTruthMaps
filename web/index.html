@@ -180,6 +180,10 @@
   #signup-submit:disabled { opacity: 0.6; }
   #signup-skip { border: 1px solid #ccc; background: #fff; color: #1a1a1a; padding: 0 14px; }
   #signup .fine { margin: 8px 0 0; font-size: 12px; color: #555; }
+  .consent { display: flex; gap: 8px; align-items: flex-start; margin: 0 0 10px;
+    font-size: 12px; line-height: 1.35; color: #444; cursor: pointer; }
+  .consent input { flex: none; width: 18px; height: 18px; margin: 1px 0 0; }
+  .consent a { color: #1a73e8; overflow-wrap: anywhere; }
   #signup-done p { margin-bottom: 0; }
   #signup-done a { color: #1a73e8; }
   #signup-pill {
@@ -290,12 +294,24 @@
         <label><input type="radio" name="mode" value="transit"><span>Transit</span></label>
       </div>
     </fieldset>
+    <!-- Consent wording is versioned: change CONSENT_VERSION in the script whenever this text changes. -->
+    <label class="consent">
+      <input type="checkbox" id="signup-consent" required>
+      <span>Email me when a new closure affects this route. I'll send a confirmation when I save
+        a route and an alert when a closure appears on it. From Zixuan Zhang, 3720 36 Avenue SW,
+        Calgary, AB, Canada T3E 1C5, jess.jm.zhang@gmail.com. Unsubscribe anytime via the link in
+        any email. We store your email, travel mode and saved routes to do this:
+        <a href="https://jessikamessika.github.io/GroundTruthMaps/web/privacy.html" target="_blank"
+           rel="noopener">https://jessikamessika.github.io/GroundTruthMaps/web/privacy.html</a>.</span>
+    </label>
+    <label class="consent">
+      <input type="checkbox" id="signup-trial-reminder">
+      <span>Also email me one reminder before my free trial ends, with upgrade info.</span>
+    </label>
     <div class="signup-actions">
-      <button type="submit" id="signup-submit">Get closure alerts</button>
+      <button type="submit" id="signup-submit" disabled>Get closure alerts</button>
       <button type="button" id="signup-skip">Not now</button>
     </div>
-    <p class="fine">By entering your email, you agree to receive closure alerts and occasional
-      updates from GroundTruth Maps. Unsubscribe anytime.</p>
     <p class="fine">Starts a free 14-day trial. Nothing on the map is locked.</p>
   </form>
   <div id="signup-done" role="status" hidden></div>
@@ -1071,7 +1087,8 @@ const SIGNUP_URL = 'https://script.google.com/macros/s/AKfycbxJ7UAYDDpUQCGJ8hSNm
 const FORM_VIEW = 'https://docs.google.com/forms/d/e/1FAIpQLSfuigbPPrxlahZllvMG2QisBJ9FC0eUNDpogHytI4XwgHCV1Q/viewform';
 const FORM_ENTRY = { email: 'entry.1045781291', mode: 'entry.134698288', src: 'entry.1872653624' };
 const TRIAL_DAYS = 14, TRIAL_ROUTES = 4, FREE_ROUTES = 2;
-const SIGNUP_KEY = 'gtmSignup';            // { email, mode, trialStart, routes: [key] }
+const SIGNUP_KEY = 'gtmSignup';            // { email, mode, trialStart, routes: [key], consentVersion, trialReminder }
+const CONSENT_VERSION = '2026-11-booth-v1';  // bump whenever the consent checkbox wording changes
 
 let signupRoute = null;     // { start, end } of the route on screen
 let signupSkipped = false;  // "Not now" this visit: don't pop the sheet again, keep the pill
@@ -1098,7 +1115,8 @@ function routeLimit(s) {
 
 // text/plain keeps this a "simple" request: Apps Script can't answer a CORS preflight.
 // `id` is a routeId() string or null; kind is 'signup' | 'add-route' | 'remove-route'.
-async function signupSend(email, mode, trialStart, id, kind) {
+// `consent` is { version, trialReminder }: what the person ticked at sign-up.
+async function signupSend(email, mode, trialStart, id, kind, consent) {
   if (!SIGNUP_URL) throw new Error('SIGNUP_URL not set');
   const [routeStart, routeEnd] = id ? id.split(' to ') : ['', ''];
   const r = await fetch(SIGNUP_URL, {
@@ -1107,6 +1125,8 @@ async function signupSend(email, mode, trialStart, id, kind) {
     body: JSON.stringify({
       email, mode, src: SRC, trial_start: trialStart, kind,
       route_start: routeStart, route_end: routeEnd,
+      consent_text_version: (consent && consent.version) || '',
+      consent_trial_reminder: !!(consent && consent.trialReminder),
     }),
   });
   if (!r.ok) throw new Error('HTTP ' + r.status);
@@ -1119,7 +1139,13 @@ const signupForm = document.getElementById('signup-form');
 const signupDone = document.getElementById('signup-done');
 const signupPill = document.getElementById('signup-pill');
 const signupSubmit = document.getElementById('signup-submit');
+const signupConsent = document.getElementById('signup-consent');
+const signupTrialReminder = document.getElementById('signup-trial-reminder');
 let signupHideTimer = null;
+
+// Submit stays disabled until the required consent box is ticked.
+function signupSyncSubmit() { signupSubmit.disabled = !signupConsent.checked; }
+signupConsent.addEventListener('change', signupSyncSubmit);
 
 function signupClose() {
   signupEl.hidden = true;
@@ -1132,6 +1158,7 @@ function signupOpen() {
   signupDone.hidden = true;
   signupEl.hidden = false;
   signupPill.hidden = true;
+  signupSyncSubmit();
   document.getElementById('signup-email').focus({ preventScroll: true });
 }
 
@@ -1192,23 +1219,28 @@ signupForm.addEventListener('submit', async (e) => {
   const input = document.getElementById('signup-email');
   const email = input.value.trim();
   if (!input.checkValidity() || !email) { input.reportValidity(); return; }
+  if (!signupConsent.checked) { signupConsent.reportValidity(); return; }
   const mode = (signupForm.querySelector('input[name="mode"]:checked') || {}).value || '';
   const trialStart = isoDay(new Date());
   const route = signupRoute;
+  const consent = { version: CONSENT_VERSION, trialReminder: signupTrialReminder.checked };
 
   signupSubmit.disabled = true;
   signupSubmit.textContent = 'Saving…';
   try {
-    await signupSend(email, mode, trialStart, route && routeId(route), 'signup');
+    await signupSend(email, mode, trialStart, route && routeId(route), 'signup', consent);
   } catch (err) {
     console.error('[signup] send failed:', err);
     signupShowDone(signupFallbackNodes(email, mode), false);
     return;
   } finally {
-    signupSubmit.disabled = false;
+    signupSyncSubmit();
     signupSubmit.textContent = 'Get closure alerts';
   }
-  signupSave({ email, mode, trialStart, routes: route ? [routeId(route)] : [] });
+  signupSave({
+    email, mode, trialStart, routes: route ? [routeId(route)] : [],
+    consentVersion: consent.version, trialReminder: consent.trialReminder,
+  });
   const p = document.createElement('p');
   p.textContent = "Thanks! Your 14-day free trial has started. We'll email you if a closure " +
     'shows up on this route. Keep exploring, nothing is locked.';
@@ -1223,7 +1255,9 @@ signupPill.addEventListener('click', async () => {
   if (!route || s.routes.length >= routeLimit(s)) return;
   signupPill.disabled = true;
   try {
-    await signupSend(s.email, s.mode, s.trialStart, routeId(route), 'add-route');
+    // Re-records what was agreed at sign-up; blank for sign-ups saved before CONSENT_VERSION existed.
+    await signupSend(s.email, s.mode, s.trialStart, routeId(route), 'add-route',
+                     { version: s.consentVersion, trialReminder: s.trialReminder });
   } catch (err) {
     console.error('[signup] send failed:', err);
     signupPill.hidden = true;
