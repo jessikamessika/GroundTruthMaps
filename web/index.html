@@ -141,6 +141,75 @@
   #plan-btn { position: fixed; top: calc(env(safe-area-inset-top, 0px) + 56px); right: 10px;
     z-index: 5; padding: 8px 12px; border-radius: 8px; border: 0;
     background: #1a73e8; color: #fff; font: 14px sans-serif; }
+
+  /* Closure-alert sign-up (shown after a route renders) */
+  #signup {
+    position: fixed; z-index: 6; left: 8px; right: 8px;
+    bottom: calc(8px + env(safe-area-inset-bottom));
+    max-width: 420px; margin: 0 auto; box-sizing: border-box;
+    background: #fff; color: #1a1a1a; border-radius: 14px; padding: 14px 16px;
+    box-shadow: 0 4px 20px rgba(0,0,0,0.35);
+    font: 15px/1.4 system-ui, sans-serif;
+  }
+  #signup[hidden], #signup-pill[hidden], #signup [hidden] { display: none; }
+  #signup p { margin: 0 32px 10px 0; }
+  #signup-close {
+    position: absolute; top: 4px; right: 4px; width: 40px; height: 40px;
+    border: 0; background: none; font-size: 22px; color: #555; cursor: pointer;
+  }
+  #signup-email {
+    width: 100%; box-sizing: border-box; min-height: 44px; padding: 0 12px;
+    border: 1px solid #ccc; border-radius: 10px; font: 16px system-ui, sans-serif;
+  }
+  #signup fieldset { border: 0; margin: 10px 0; padding: 0; }
+  #signup legend { padding: 0; margin-bottom: 6px; font-size: 14px; color: #444; }
+  .mode-chips { display: flex; gap: 6px; }
+  .mode-chips label { flex: 1; }
+  .mode-chips input { position: absolute; opacity: 0; pointer-events: none; }
+  .mode-chips span {
+    display: flex; align-items: center; justify-content: center; min-height: 40px;
+    border: 1px solid #ccc; border-radius: 999px; font-size: 14px; cursor: pointer;
+  }
+  .mode-chips input:checked + span { background: #1a1a1a; border-color: #1a1a1a; color: #fff; }
+  .mode-chips input:focus-visible + span { outline: 2px solid #1a73e8; outline-offset: 2px; }
+  .signup-actions { display: flex; gap: 8px; }
+  .signup-actions button {
+    min-height: 44px; border-radius: 10px; font: inherit; font-weight: 600; cursor: pointer;
+  }
+  #signup-submit { flex: 1; border: 0; background: #1a1a1a; color: #fff; }
+  #signup-submit:disabled { opacity: 0.6; }
+  #signup-skip { border: 1px solid #ccc; background: #fff; color: #1a1a1a; padding: 0 14px; }
+  #signup .fine { margin: 8px 0 0; font-size: 12px; color: #555; }
+  #signup-done p { margin-bottom: 0; }
+  #signup-done a { color: #1a73e8; }
+  #signup-pill {
+    position: fixed; z-index: 5; right: 10px;
+    top: calc(env(safe-area-inset-top, 0px) + 100px);
+    padding: 8px 12px; border-radius: 8px; border: 0;
+    background: #fff; color: #1a1a1a; font: 14px sans-serif;
+    box-shadow: 0 1px 4px rgba(0,0,0,.3); cursor: pointer;
+  }
+  #signup-pill:disabled { color: #555; cursor: default; }
+
+  /* Manage alerts (inside the legend panel, signed-up devices only) */
+  #alerts-manage { border-top: 1px solid #e5e5e5; margin-top: 6px; padding-top: 8px; }
+  #alerts-manage[hidden] { display: none; }
+  #alerts-manage h3 { margin: 0 0 2px; font-size: 14px; }
+  .alerts-email { font-size: 13px; color: #555; overflow-wrap: anywhere; }
+  #alerts-routes { list-style: none; margin: 6px 0; padding: 0; }
+  #alerts-routes li {
+    display: flex; align-items: center; gap: 8px; min-height: 40px;
+    font-size: 13px; border-bottom: 1px solid #f0f0f0;
+  }
+  #alerts-routes li span { flex: 1; overflow-wrap: anywhere; }
+  #alerts-routes li.empty { color: #555; }
+  #alerts-manage button {
+    min-height: 36px; padding: 0 12px; border: 1px solid #ccc; border-radius: 8px;
+    background: #fff; color: #1a1a1a; font: 13px system-ui, sans-serif; cursor: pointer;
+  }
+  #alerts-manage button:disabled { opacity: 0.6; cursor: default; }
+  .alerts-msg { font-size: 12px; color: #7f1d1d; margin-bottom: 6px; }
+  .alerts-msg:empty { display: none; }
 </style>
 </head>
 <body>
@@ -193,10 +262,44 @@
       <span>Construction detours (City)
         <span class="constr-status" id="constr-status">Loading…</span></span>
     </label>
+    <section id="alerts-manage" aria-labelledby="alerts-title" hidden>
+      <h3 id="alerts-title">Your closure alerts</h3>
+      <div class="alerts-email" id="alerts-email"></div>
+      <ul id="alerts-routes"></ul>
+      <div class="alerts-msg" id="alerts-msg" role="status"></div>
+      <button type="button" id="alerts-reset">Use a different email</button>
+    </section>
   </div>
 </div>
 <div id="route-banner"></div>
 <button id="plan-btn" type="button">Plan route</button>
+<button id="signup-pill" type="button" hidden></button>
+
+<div id="signup" role="dialog" aria-labelledby="signup-title" hidden>
+  <button id="signup-close" type="button" aria-label="Not now">×</button>
+  <form id="signup-form" novalidate>
+    <p id="signup-title"><strong>Want a heads-up when a closure shows up on this route?</strong> Drop your email.</p>
+    <input type="email" id="signup-email" required placeholder="you@example.com"
+           autocomplete="email" inputmode="email" aria-label="Email">
+    <fieldset>
+      <legend>How do you mostly get around?</legend>
+      <div class="mode-chips">
+        <label><input type="radio" name="mode" value="walk"><span>Walk</span></label>
+        <label><input type="radio" name="mode" value="bike"><span>Bike</span></label>
+        <label><input type="radio" name="mode" value="drive"><span>Drive</span></label>
+        <label><input type="radio" name="mode" value="transit"><span>Transit</span></label>
+      </div>
+    </fieldset>
+    <div class="signup-actions">
+      <button type="submit" id="signup-submit">Get closure alerts</button>
+      <button type="button" id="signup-skip">Not now</button>
+    </div>
+    <p class="fine">By entering your email, you agree to receive closure alerts and occasional
+      updates from GroundTruth Maps. Unsubscribe anytime.</p>
+    <p class="fine">Starts a free 14-day trial. Nothing on the map is locked.</p>
+  </form>
+  <div id="signup-done" role="status" hidden></div>
+</div>
 <script>
 
 const CITIES = {
@@ -212,6 +315,14 @@ if (CITY === CITIES.sf) document.querySelector('link[rel="manifest"]').href = 'm
 document.title = CITY.name + ' Cycling Closures Map';
 document.getElementById('welcome-title').textContent = CITY.name + ' Cycling Closures Map';
 
+// Entry channel (?src=booth-qr | booth-nfc | booth-form), stored with each sign-up.
+// Booth visitors skip the welcome card and land straight in route planning.
+const SRC = (new URLSearchParams(location.search).get('src') || 'direct').slice(0, 40);
+const BOOTH = SRC.startsWith('booth-') && CITY === CITIES.calgary;
+const VENUE = { center: [-114.1335095, 51.0753821], zoom: 14 };   // booth venue: set before Nov 4
+const PITCH = 'Is your route closed? Find out in 10 seconds.';
+if (BOOTH) document.getElementById('route-banner').textContent = PITCH;
+
 if (!CITY.network) {
   document.getElementById('detour-hint').style.display = 'none';
   ['t-network', 't-unconfirmed', 't-detour'].forEach(id =>
@@ -221,8 +332,8 @@ if (!CITY.network) {
 const map = new maplibregl.Map({
   container: 'map',
   style: 'https://tiles.openfreemap.org/styles/liberty',
-  center: CITY.center,
-  zoom: CITY.zoom,
+  center: BOOTH ? VENUE.center : CITY.center,
+  zoom: BOOTH ? VENUE.zoom : CITY.zoom,
   maxPitch: 80,
   attributionControl: {
     compact: true,
@@ -277,7 +388,7 @@ if (window.matchMedia('(max-width: 600px)').matches) setCollapsed(true);
   const btn = document.getElementById('welcome-close');
   let seen = false;
   try { seen = localStorage.getItem(KEY) === '1'; } catch (e) {}
-  if (seen) return;
+  if (seen || BOOTH) return;
 
   el.hidden = false;
   btn.focus();
@@ -678,6 +789,7 @@ map.on('load', async () => {
     map.getSource('route').setData({ type: 'FeatureCollection', features: [] });
     map.getSource('route-hits').setData({ type: 'FeatureCollection', features: [] });
     banner.textContent = planMode ? 'Tap your start point' : '';
+    signupClearRoute();
   }
 
   document.getElementById('plan-btn').onclick = () => {
@@ -685,6 +797,12 @@ map.on('load', async () => {
     document.getElementById('plan-btn').textContent = planMode ? 'Exit route mode' : 'Plan route';
     resetRoute();
   };
+
+  if (BOOTH) {   // land in route planning with the pitch still showing
+    planMode = true;
+    document.getElementById('plan-btn').textContent = 'Exit route mode';
+    banner.textContent = `${PITCH} Where do you commute, walk or ride? Tap your start point.`;
+  }
 
   map.on('click', async (e) => {
     if (!planMode) return;
@@ -756,6 +874,7 @@ map.on('load', async () => {
       if (prefix) banner.textContent = prefix + ' ' + banner.textContent;
       banner.textContent += constrRouteNote(constrHits);
       // ===== NEW BLOCK ENDS HERE =====
+      signupOffer(pts[0], pts[1]);   // email ask only once the result is on screen
 
     } catch (err) {
       console.error('Routing error:', err);
@@ -942,6 +1061,250 @@ try {
 } catch (err) {
   console.error('[construction] init failed:', err);
 }
+
+// ===== Closure-alert sign-up =====
+// Offered after a route result renders; skipping never locks anything.
+// Sign-ups go to an Apps Script web app (apps-script/signup.gs) that appends a
+// row to the "App sign-ups" tab of the closure-alerts sheet. Any failure,
+// including an unset URL, falls back to a pre-filled link to the Google Form.
+const SIGNUP_URL = 'https://script.google.com/macros/s/AKfycbxJ7UAYDDpUQCGJ8hSNmVkuEXa4L6TofjYZ_7aqJnfvquSm4e0TfWCoDQ2z4I3DZAY/exec';   // Apps Script web app /exec URL
+const FORM_VIEW = 'https://docs.google.com/forms/d/e/1FAIpQLSfuigbPPrxlahZllvMG2QisBJ9FC0eUNDpogHytI4XwgHCV1Q/viewform';
+const FORM_ENTRY = { email: 'entry.1045781291', mode: 'entry.134698288', src: 'entry.1872653624' };
+const TRIAL_DAYS = 14, TRIAL_ROUTES = 4, FREE_ROUTES = 2;
+const SIGNUP_KEY = 'gtmSignup';            // { email, mode, trialStart, routes: [key] }
+
+let signupRoute = null;     // { start, end } of the route on screen
+let signupSkipped = false;  // "Not now" this visit: don't pop the sheet again, keep the pill
+
+function signupLoad() {
+  try { return JSON.parse(localStorage.getItem(SIGNUP_KEY)) || null; } catch (e) { return null; }
+}
+function signupSave(s) {
+  try {
+    if (s) localStorage.setItem(SIGNUP_KEY, JSON.stringify(s));
+    else localStorage.removeItem(SIGNUP_KEY);
+  } catch (e) {}
+  alertsRender();
+}
+
+const fmtPt = p => `${p[1].toFixed(5)},${p[0].toFixed(5)}`;   // lat,lng: pastes into any map
+const routeId = r => `${fmtPt(r.start)} to ${fmtPt(r.end)}`;
+const isoDay = d => d.toLocaleDateString('en-CA', { timeZone: CITY.timezone });
+
+function routeLimit(s) {
+  const days = (Date.now() - Date.parse(s.trialStart + 'T00:00:00')) / 864e5;
+  return days < TRIAL_DAYS ? TRIAL_ROUTES : FREE_ROUTES;
+}
+
+// text/plain keeps this a "simple" request: Apps Script can't answer a CORS preflight.
+// `id` is a routeId() string or null; kind is 'signup' | 'add-route' | 'remove-route'.
+async function signupSend(email, mode, trialStart, id, kind) {
+  if (!SIGNUP_URL) throw new Error('SIGNUP_URL not set');
+  const [routeStart, routeEnd] = id ? id.split(' to ') : ['', ''];
+  const r = await fetch(SIGNUP_URL, {
+    method: 'POST',
+    headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+    body: JSON.stringify({
+      email, mode, src: SRC, trial_start: trialStart, kind,
+      route_start: routeStart, route_end: routeEnd,
+    }),
+  });
+  if (!r.ok) throw new Error('HTTP ' + r.status);
+  const res = await r.json();   // a script error comes back as an HTML page: json() throws
+  if (!res.ok) throw new Error(res.error || 'rejected');
+}
+
+const signupEl = document.getElementById('signup');
+const signupForm = document.getElementById('signup-form');
+const signupDone = document.getElementById('signup-done');
+const signupPill = document.getElementById('signup-pill');
+const signupSubmit = document.getElementById('signup-submit');
+let signupHideTimer = null;
+
+function signupClose() {
+  signupEl.hidden = true;
+  clearTimeout(signupHideTimer);
+  signupRefreshPill();
+}
+
+function signupOpen() {
+  signupForm.hidden = false;
+  signupDone.hidden = true;
+  signupEl.hidden = false;
+  signupPill.hidden = true;
+  document.getElementById('signup-email').focus({ preventScroll: true });
+}
+
+function signupShowDone(nodes, autoHide) {
+  signupForm.hidden = true;
+  signupDone.replaceChildren(...nodes);
+  signupDone.hidden = false;
+  signupEl.hidden = false;
+  clearTimeout(signupHideTimer);
+  if (autoHide) signupHideTimer = setTimeout(signupClose, 5000);
+}
+
+// Shown when the sheet is closed and a route is on screen.
+function signupRefreshPill() {
+  const s = signupLoad();
+  if (!signupRoute || !signupEl.hidden) { signupPill.hidden = true; return; }
+  signupPill.disabled = false;
+  if (!s) {
+    signupPill.textContent = '🔔 Get alerts for this route';
+  } else if (s.routes.includes(routeId(signupRoute))) {
+    signupPill.textContent = '🔔 This route is on your alerts ✓';
+    signupPill.disabled = true;
+  } else if (s.routes.length >= routeLimit(s)) {
+    signupPill.textContent = `🔔 Route alerts full (${s.routes.length}/${routeLimit(s)})`;
+    signupPill.disabled = true;
+  } else {
+    signupPill.textContent = `🔔 Add this route to alerts (${s.routes.length}/${routeLimit(s)})`;
+  }
+  signupPill.hidden = false;
+}
+
+function signupOffer(start, end) {
+  signupRoute = { start, end };
+  if (signupLoad() || signupSkipped || !signupEl.hidden) signupRefreshPill();
+  else signupOpen();
+}
+
+function signupClearRoute() {
+  signupRoute = null;
+  signupRefreshPill();
+}
+
+function signupFallbackNodes(email, mode) {
+  const p = document.createElement('p');
+  p.append("Couldn't save right now. ");
+  const a = document.createElement('a');
+  const prefill = { [FORM_ENTRY.email]: email, [FORM_ENTRY.src]: SRC };
+  if (mode) prefill[FORM_ENTRY.mode] = mode[0].toUpperCase() + mode.slice(1);   // form options are "Walk" etc.
+  a.href = FORM_VIEW + '?usp=pp_url&' + new URLSearchParams(prefill);
+  a.target = '_blank'; a.rel = 'noopener';
+  a.textContent = 'Use the sign-up form instead';
+  p.append(a, '.');
+  return [p];
+}
+
+signupForm.addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const input = document.getElementById('signup-email');
+  const email = input.value.trim();
+  if (!input.checkValidity() || !email) { input.reportValidity(); return; }
+  const mode = (signupForm.querySelector('input[name="mode"]:checked') || {}).value || '';
+  const trialStart = isoDay(new Date());
+  const route = signupRoute;
+
+  signupSubmit.disabled = true;
+  signupSubmit.textContent = 'Saving…';
+  try {
+    await signupSend(email, mode, trialStart, route && routeId(route), 'signup');
+  } catch (err) {
+    console.error('[signup] send failed:', err);
+    signupShowDone(signupFallbackNodes(email, mode), false);
+    return;
+  } finally {
+    signupSubmit.disabled = false;
+    signupSubmit.textContent = 'Get closure alerts';
+  }
+  signupSave({ email, mode, trialStart, routes: route ? [routeId(route)] : [] });
+  const p = document.createElement('p');
+  p.textContent = "Thanks! Your 14-day free trial has started. We'll email you if a closure " +
+    'shows up on this route. Keep exploring, nothing is locked.';
+  signupShowDone([p], true);
+});
+
+// Attach the route on screen to an existing sign-up (no re-typing the email).
+signupPill.addEventListener('click', async () => {
+  const s = signupLoad();
+  if (!s) { signupSkipped = false; signupOpen(); return; }
+  const route = signupRoute;
+  if (!route || s.routes.length >= routeLimit(s)) return;
+  signupPill.disabled = true;
+  try {
+    await signupSend(s.email, s.mode, s.trialStart, routeId(route), 'add-route');
+  } catch (err) {
+    console.error('[signup] send failed:', err);
+    signupPill.hidden = true;
+    signupShowDone(signupFallbackNodes(s.email, s.mode), false);
+    return;
+  }
+  s.routes.push(routeId(route));
+  signupSave(s);
+  signupRefreshPill();
+});
+
+// ----- Manage alerts (legend panel) -----
+// Removing a route is sent to the sheet so alerts stop. "Use a different email"
+// only forgets this device's sign-up; that email's rows stay in the sheet.
+const alertsEl = document.getElementById('alerts-manage');
+const alertsMsg = document.getElementById('alerts-msg');
+
+function alertsRender() {
+  const s = signupLoad();
+  alertsEl.hidden = !s;
+  document.querySelector('#panel-toggle span').textContent =
+    s ? 'Legend, layers and alerts' : 'Legend and layers';
+  if (!s) return;
+  document.getElementById('alerts-email').textContent =
+    `${s.email} · ${s.routes.length}/${routeLimit(s)} routes`;
+  const list = document.getElementById('alerts-routes');
+  list.replaceChildren();
+  if (!s.routes.length) {
+    const li = document.createElement('li');
+    li.className = 'empty';
+    li.textContent = 'No routes yet. Plan a route to add one.';
+    list.appendChild(li);
+  }
+  for (const id of s.routes) {
+    const li = document.createElement('li');
+    const label = document.createElement('span');
+    label.textContent = id;
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.textContent = 'Remove';
+    btn.setAttribute('aria-label', `Remove route ${id}`);
+    btn.addEventListener('click', () => alertsRemove(id, btn));
+    li.append(label, btn);
+    list.appendChild(li);
+  }
+}
+
+async function alertsRemove(id, btn) {
+  const s = signupLoad();
+  if (!s) return;
+  btn.disabled = true;
+  alertsMsg.textContent = '';
+  try {
+    await signupSend(s.email, s.mode, s.trialStart, id, 'remove-route');
+  } catch (err) {
+    console.error('[signup] remove failed:', err);
+    alertsMsg.textContent = "Couldn't remove that route right now. Try again.";
+    btn.disabled = false;
+    return;
+  }
+  s.routes = s.routes.filter(r => r !== id);
+  signupSave(s);
+  signupRefreshPill();
+}
+
+document.getElementById('alerts-reset').addEventListener('click', () => {
+  if (!confirm('Forget this email on this device? You can sign up again with a different one. ' +
+               'Alerts already set up for it are not cancelled.')) return;
+  signupSave(null);
+  alertsMsg.textContent = '';
+  signupSkipped = false;
+  signupForm.reset();
+  if (signupRoute) signupOpen(); else signupRefreshPill();
+});
+
+alertsRender();
+
+function signupSkip() { signupSkipped = true; signupClose(); }
+document.getElementById('signup-skip').addEventListener('click', signupSkip);
+document.getElementById('signup-close').addEventListener('click', signupSkip);
+signupEl.addEventListener('keydown', (e) => { if (e.key === 'Escape') signupSkip(); });
 </script>
 </body>
 </html>
