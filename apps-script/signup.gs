@@ -8,7 +8,7 @@
 
 const TAB = 'App sign-ups';
 const HEADERS = ['timestamp', 'email', 'mode', 'src', 'route_start', 'route_end', 'trial_start', 'kind',
-                 'consent_text_version', 'consent_trial_reminder'];
+                 'consent_text_version'];
 const MODES = ['', 'walk', 'bike', 'drive', 'transit'];
 // delete-request comes from web/privacy.html; those rows are processed by hand.
 const KINDS = ['signup', 'add-route', 'remove-route', 'delete-request'];
@@ -44,7 +44,6 @@ function doPost(e) {
       clip(d.route_start), clip(d.route_end), clip(d.trial_start),
       d.kind,
       consent ? clip(d.consent_text_version) : '',
-      consent ? d.consent_trial_reminder === true : '',
     ]);
   } finally {
     lock.releaseLock();
