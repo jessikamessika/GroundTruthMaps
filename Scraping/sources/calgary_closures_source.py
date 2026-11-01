@@ -103,7 +103,12 @@ def fetch_closures() -> list[dict]:
                     # STATUS is temporal (CURRENT/FUTURE), not part of the
                     # open/closed schema — kept as raw context so the map
                     # can style FUTURE closures differently (muted).
-                    extra_properties={"calgary_temporal_status": temporal_status},
+                    # GLOBALID is the City's stable per-record GUID; OBJECTID
+                    # can be reassigned if the layer is rebuilt.
+                    extra_properties={
+                        "calgary_temporal_status": temporal_status,
+                        "calgary_globalid": props.get("GLOBALID"),
+                    },
                 )
             )
         except (KeyError, ValueError):
