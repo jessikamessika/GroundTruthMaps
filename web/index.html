@@ -56,23 +56,31 @@
     padding: 6px 10px; border-radius: 999px;
     font: 12px/1.2 system-ui, sans-serif;
     box-shadow: 0 1px 4px rgba(0,0,0,0.25);
+    max-width: calc(100vw - 205px);   /* wraps rather than running under the Plan route button */
   }
   #updated.stale { background: #fef3c7; color: #78350f; }
   #updated:empty { display: none; }
-  /* Network loading indicator (sits just below the freshness pill) */
+
+  /* Left column below the top row: loading / construction pills, route banner,
+     alerts pill. Stops short of the map controls on the right. */
+  #top-stack {
+    position: fixed; z-index: 5; left: 8px; right: 49px;
+    top: calc(env(safe-area-inset-top, 0px) + 52px);
+    display: flex; flex-direction: column; align-items: flex-start; gap: 6px;
+    pointer-events: none;   /* the map stays tappable between the items */
+  }
+  #top-stack > * { pointer-events: auto; max-width: 100%; box-sizing: border-box; }
+
+  /* Network loading indicator */
   #loading {
-    position: absolute; z-index: 2; left: 8px;
-    top: calc(40px + env(safe-area-inset-top));
     background: rgba(255,255,255,0.96); color: #1a1a1a;
     padding: 6px 10px; border-radius: 999px;
     font: 12px/1.2 system-ui, sans-serif;
     box-shadow: 0 1px 4px rgba(0,0,0,0.25);
   }
   #loading[hidden] { display: none; }
-  /* Construction data failure pill (below the loading pill); visible even when the panel is collapsed */
+  /* Construction data failure pill; visible even when the panel is collapsed */
   #constr-note {
-    position: absolute; z-index: 2; left: 8px;
-    top: calc(72px + env(safe-area-inset-top));
     background: #fef2f2; color: #7f1d1d; border: 1px solid #fecaca;
     padding: 6px 10px; border-radius: 999px;
     font: 12px/1.2 system-ui, sans-serif;
@@ -112,18 +120,15 @@
   .report-links { display: block; margin-top: 6px; font-size: 12px; color: #555; }
   .report-links a { color: #1a73e8; white-space: nowrap; }
 
-  /* Feedback link: in the strip below the legend panel, left of the attribution.
-     z-index 1 keeps it under the map controls (2), so an expanded attribution
-     covers it rather than the other way round. Height stays under the 24px
-     scope-note offset. */
+  /* Feedback button: floats just above the legend panel (it lives inside
+     #panel), so it follows the panel as it expands and collapses. */
   #feedback-link {
-    position: absolute; z-index: 1; left: 8px;
-    bottom: calc(2px + env(safe-area-inset-bottom));
-    height: 22px; padding: 0 10px; box-sizing: border-box;
+    position: absolute; left: 0; bottom: calc(100% + 8px);
+    min-height: 36px; padding: 0 14px; box-sizing: border-box;
     display: flex; align-items: center;
     background: rgba(255,255,255,0.96); color: #1a1a1a; text-decoration: none;
-    border-radius: 999px; box-shadow: 0 1px 4px rgba(0,0,0,0.25);
-    font: 12px/1 system-ui, sans-serif;
+    border-radius: 999px; box-shadow: 0 1px 4px rgba(0,0,0,0.3);
+    font: 600 14px/1 system-ui, sans-serif;
   }
   #feedback-link[hidden] { display: none; }
   .maplibregl-ctrl-top-right { top: env(safe-area-inset-top); }
@@ -150,12 +155,12 @@
   }
 </style>
 <style>
-  #route-banner { position: fixed; top: calc(env(safe-area-inset-top, 0px) + 8px); left: 50%;
-    transform: translateX(-50%); max-width: 90vw; background: #fff; padding: 6px 12px;
+  #route-banner { background: #fff; padding: 6px 12px;
     border-radius: 16px; font: 14px sans-serif; box-shadow: 0 1px 4px rgba(0,0,0,.3);
-    z-index: 5; white-space: normal; }
+    white-space: normal; }
   #route-banner:empty { display: none; }
-  #plan-btn { position: fixed; top: calc(env(safe-area-inset-top, 0px) + 56px); right: 10px;
+  /* Top row, left of the map controls (10px margin + 29px control + 2px ring + 8px gap) */
+  #plan-btn { position: fixed; top: calc(env(safe-area-inset-top, 0px) + 10px); right: 49px;
     z-index: 5; padding: 8px 12px; border-radius: 8px; border: 0;
     background: #1a73e8; color: #fff; font: 14px sans-serif; }
 
@@ -204,9 +209,27 @@
   #signup .consent-sub { margin: 0 0 10px 26px; font-size: 11px; color: #666; overflow-wrap: anywhere; }
   #signup-done p { margin-bottom: 0; }
   #signup-done a { color: #1a73e8; }
+  /* Compact first ask (small screens): one line, expands to the form */
+  #signup.teaser { padding: 8px 44px 8px 12px; }
+  #signup-teaser { display: flex; align-items: center; gap: 10px; font-size: 14px; }
+  #signup-teaser span { flex: 1; }
+  #signup-expand {
+    min-height: 36px; padding: 0 14px; border: 0; border-radius: 10px;
+    background: #1a1a1a; color: #fff; font: inherit; font-weight: 600; cursor: pointer;
+  }
+  /* Tighter form on phones so more of the route stays visible */
+  @media (max-width: 600px) {
+    #signup { padding: 10px 12px; font-size: 14px; }
+    #signup p { margin-bottom: 6px; }
+    #signup-email { min-height: 40px; }
+    #signup fieldset { margin: 6px 0; }
+    #signup legend { margin-bottom: 4px; font-size: 12px; }
+    .mode-chips span { min-height: 32px; font-size: 13px; }
+    #signup .consent-sub { margin-bottom: 6px; }
+    .signup-actions button { min-height: 40px; }
+    #signup .fine { margin-top: 4px; font-size: 11px; }
+  }
   #signup-pill {
-    position: fixed; z-index: 5; right: 10px;
-    top: calc(env(safe-area-inset-top, 0px) + 100px);
     padding: 8px 12px; border-radius: 8px; border: 0;
     background: #fff; color: #1a1a1a; font: 14px sans-serif;
     box-shadow: 0 1px 4px rgba(0,0,0,.3); cursor: pointer;
@@ -238,10 +261,13 @@
 <div id="map"></div>
 <div id="updated"></div>
 <div id="scope-note" role="note"></div>
-<div id="loading" hidden>Loading cycling network…</div>
 <div id="error" role="alert"></div>
-<div id="constr-note" role="status"></div>
-<a id="feedback-link" target="_blank" rel="noopener" hidden>Feedback</a>
+<div id="top-stack">
+  <div id="loading" hidden>Loading cycling network…</div>
+  <div id="constr-note" role="status"></div>
+  <div id="route-banner"></div>
+  <button id="signup-pill" type="button" hidden></button>
+</div>
 
 <div id="welcome" role="dialog" aria-modal="true" aria-labelledby="welcome-title" hidden>
   <div class="card">
@@ -252,6 +278,7 @@
 </div>
 
 <div id="panel">
+  <a id="feedback-link" target="_blank" rel="noopener" hidden>Feedback</a>
   <button id="panel-toggle" aria-expanded="true">
     <span>Legend and layers</span><span class="chev">▾</span>
   </button>
@@ -294,12 +321,14 @@
     </section>
   </div>
 </div>
-<div id="route-banner"></div>
 <button id="plan-btn" type="button">Plan route</button>
-<button id="signup-pill" type="button" hidden></button>
 
 <div id="signup" role="dialog" aria-labelledby="signup-title" hidden>
   <button id="signup-close" type="button" aria-label="Not now">×</button>
+  <div id="signup-teaser" hidden>
+    <span>🔔 Join the beta: get alerts for this route</span>
+    <button type="button" id="signup-expand">Join</button>
+  </div>
   <form id="signup-form" novalidate>
     <p id="signup-title"><strong>Join the beta.</strong> Get an email when a closure shows up on this route.</p>
     <input type="email" id="signup-email" required placeholder="you@example.com"
@@ -442,7 +471,7 @@ class Toggle3D { // button for 3D
     };
     mk('3D', () => set3D(!is3D));
     let sat = false;
-    mk('🛰', () => {
+    mk('Sat', () => {
       sat = !sat;
       map.setLayoutProperty('satellite', 'visibility', sat ? 'visible' : 'none');
     });
@@ -1204,7 +1233,12 @@ const signupDone = document.getElementById('signup-done');
 const signupPill = document.getElementById('signup-pill');
 const signupSubmit = document.getElementById('signup-submit');
 const signupConsent = document.getElementById('signup-consent');
+const signupTeaser = document.getElementById('signup-teaser');
 let signupHideTimer = null;
+let signupOfferTimer = null;
+const SIGNUP_DELAY_MS = 3000;   // let the route result sink in before asking
+// Phones get a one-line ask first, and the form keeps the route in view above it.
+const SMALL_SCREEN = window.matchMedia('(max-width: 600px)');
 
 // Submit stays disabled until the required consent box is ticked.
 function signupSyncSubmit() { signupSubmit.disabled = !signupConsent.checked; }
@@ -1216,16 +1250,52 @@ function signupClose() {
   signupRefreshPill();
 }
 
-function signupOpen() {
-  signupForm.hidden = false;
+// `teaser`: show only the one-line ask; "Join" expands it to the form.
+function signupOpen(teaser) {
+  signupTeaser.hidden = !teaser;
+  signupEl.classList.toggle('teaser', !!teaser);
+  signupForm.hidden = !!teaser;
   signupDone.hidden = true;
   signupEl.hidden = false;
   signupPill.hidden = true;
   signupSyncSubmit();
-  document.getElementById('signup-email').focus({ preventScroll: true });
+  if (teaser) return;
+  // On phones, don't pop the keyboard unasked; move the route above the form instead.
+  if (SMALL_SCREEN.matches) requestAnimationFrame(signupFitRoute);
+  else document.getElementById('signup-email').focus({ preventScroll: true });
+}
+
+// Fit the route's endpoints into the part of the map the sheet (and the
+// on-screen keyboard, via visualViewport) leaves visible. Camera only.
+function signupFitRoute() {
+  try {
+    if (!signupRoute || signupEl.hidden || signupForm.hidden) return;
+    const vv = window.visualViewport;
+    const visTop = vv ? vv.offsetTop : 0;
+    const visBottom = Math.min(vv ? vv.offsetTop + vv.height : innerHeight,
+                               signupEl.getBoundingClientRect().top);
+    const top = visTop + 60;                      // clears the top row of buttons
+    const bottom = innerHeight - visBottom + 20;
+    if (innerHeight - top - bottom < 80) return;  // no useful room left
+    const { start, end } = signupRoute;
+    map.fitBounds([[Math.min(start[0], end[0]), Math.min(start[1], end[1])],
+                   [Math.max(start[0], end[0]), Math.max(start[1], end[1])]],
+      { padding: { top, bottom, left: 30, right: 60 }, maxZoom: 16, duration: 300 });
+  } catch (e) { console.error('[signup] fit failed', e); }
+}
+
+let signupFitTimer = null;
+if (window.visualViewport) {
+  window.visualViewport.addEventListener('resize', () => {   // keyboard opened or closed
+    if (!SMALL_SCREEN.matches) return;
+    clearTimeout(signupFitTimer);
+    signupFitTimer = setTimeout(signupFitRoute, 150);
+  });
 }
 
 function signupShowDone(nodes, autoHide) {
+  signupTeaser.hidden = true;
+  signupEl.classList.remove('teaser');
   signupForm.hidden = true;
   signupDone.replaceChildren(...nodes);
   signupDone.hidden = false;
@@ -1254,12 +1324,22 @@ function signupRefreshPill() {
 }
 
 function signupOffer(start, end) {
-  signupRoute = { start, end };
-  if (signupLoad() || signupSkipped || !signupEl.hidden) signupRefreshPill();
-  else signupOpen();
+  const route = { start, end };
+  signupRoute = route;
+  clearTimeout(signupOfferTimer);
+  if (signupLoad() || signupSkipped || !signupEl.hidden) { signupRefreshPill(); return; }
+  signupOfferTimer = setTimeout(() => {
+    // Only if the same route is still on screen and nothing changed meanwhile.
+    if (signupRoute === route && signupEl.hidden && !signupSkipped && !signupLoad()) {
+      signupOpen(SMALL_SCREEN.matches);
+    } else {
+      signupRefreshPill();
+    }
+  }, SIGNUP_DELAY_MS);
 }
 
 function signupClearRoute() {
+  clearTimeout(signupOfferTimer);
   signupRoute = null;
   signupRefreshPill();
 }
@@ -1397,6 +1477,8 @@ document.getElementById('alerts-reset').addEventListener('click', () => {
 });
 
 alertsRender();
+
+document.getElementById('signup-expand').addEventListener('click', () => signupOpen(false));
 
 function signupSkip() { signupSkipped = true; signupClose(); }
 document.getElementById('signup-skip').addEventListener('click', signupSkip);
