@@ -1028,6 +1028,7 @@ map.on('load', async () => {
       const prefix = safeRouteMessage(result);
       if (prefix) banner.textContent = prefix + ' ' + banner.textContent;
       banner.textContent += constrRouteNote(constrHits);
+      banner.textContent += bowNoteText(result, hits, closuresData);   // '' unless it applies
       // ===== NEW BLOCK ENDS HERE =====
       signupOffer(pts[0], pts[1]);   // email ask only once the result is on screen
 
@@ -1148,6 +1149,44 @@ function constrRouteNote(hits) {
   const names = hits.map(f => (f.properties && f.properties.info) || 'Construction').join('; ');
   return ` ⚠ Passes ${hits.length} construction site${hits.length > 1 ? 's' : ''}: ${names}. ` +
     'Closure type not specified by the City (single-lane, full road, sidewalks etc.). Check before riding.';
+}
+
+// ===== Bow River known-issue notice (banner text only) =====
+// Avoidance can pick a longer reroute than needed near these posted detours.
+// Matched on closureInfo().name, trimmed and case-insensitive.
+const BOWNOTE_NAMES = new Set([
+  'BOW RIVER PATHWAY & DOUGLAS FIR TRAIL',
+  'BOW RIVER PATHWAY - SHAGANAPPI PUMP STATION PH. 3',
+  'BOW RIVER PATHWAY - MONTGOMERY VW NW',
+  'PARKDALE BV NW - 30 ST TO 31 ST NW',
+].map(n => n.trim().toLowerCase()));
+const BOWNOTE_NEAR_M = 20;   // displayed route this close to a listed closure/detour counts
+const BOWNOTE_TEXT = 'Known issue: routes on Bow River pathways near posted detours may show a ' +
+  'longer reroute than needed. Visually check the map and closure popups.';
+
+const bowNoteListed = p => BOWNOTE_NAMES.has(closureInfo(p).name.trim().toLowerCase());
+
+// Text appended to the route banner, or '' when it doesn't apply. Shown when
+// (a) the plain ORS route hits a listed closure, or (b) the displayed route
+// passes within BOWNOTE_NEAR_M of one that's active (any status). Never throws.
+function bowNoteText(result, hits, closures) {
+  try {
+    if (CITY !== CITIES.calgary || !result || !closures) return '';
+    const plain = result.plain && result.plain[0];
+    const plainHits = !plain ? [] : plain === result.route ? hits : routeCrossesClosures(plain, closures);
+    if (plainHits.some(h => bowNoteListed(h.feature.properties || {}))) return ' ' + BOWNOTE_TEXT;
+    for (const f of closures.features) {
+      const p = f.properties || {};
+      const t = temporalStatus(p);
+      if (t === 'FUTURE' || t === 'PAST' || !bowNoteListed(p)) continue;
+      const near = turf.buffer(f, BOWNOTE_NEAR_M / 1000, { units: 'kilometers' });
+      if (near && turf.booleanIntersects(result.route, near)) return ' ' + BOWNOTE_TEXT;
+    }
+    return '';
+  } catch (err) {
+    console.error('[bow-note] check failed:', err);
+    return '';
+  }
 }
 
 // Fail closed: anything other than a valid FeatureCollection with a
