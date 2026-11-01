@@ -210,12 +210,12 @@
   #signup .consent-sub { margin: 0 0 10px 26px; font-size: 11px; color: #666; overflow-wrap: anywhere; }
   #signup-done p { margin-bottom: 0; }
   #signup-done a { color: #1a73e8; }
-  /* Phones: at most half the screen, so the route stays visible.
+  /* Phones: capped height, so the route stays visible.
      The form scrolls inside the sheet; the × stays put. */
   @media (max-width: 600px) {
     #signup {
       padding: 10px 12px; font-size: 14px;
-      max-height: 50vh; max-height: 50dvh;
+      max-height: 390px;
       display: flex; flex-direction: column;
     }
     #signup-form, #signup-done { min-height: 0; overflow-y: auto; overscroll-behavior: contain; }
@@ -426,7 +426,7 @@ document.getElementById('welcome-title').textContent = CITY.name + ' Cycling Clo
 // Booth visitors skip the welcome card and land straight in route planning.
 const SRC = (new URLSearchParams(location.search).get('src') || 'direct').slice(0, 40);
 const BOOTH = SRC.startsWith('booth-') && CITY === CITIES.calgary;
-const VENUE = { center: [-114.1335095, 51.0753821], zoom: 14 };   // booth venue: set before Nov 4
+const VENUE = { center: [-114.0575156, 51.044078], zoom: 12 };   // booth venue: set before Nov 4
 const PITCH = 'Is your route closed? Find out in 10 seconds.';
 if (BOOTH) document.getElementById('route-banner').textContent = PITCH;
 
