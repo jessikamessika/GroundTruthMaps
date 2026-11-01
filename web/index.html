@@ -109,6 +109,23 @@
     padding: 12px 28px 12px 12px;
   }
   .maplibregl-popup-close-button { font-size: 22px; width: 32px; height: 32px; }
+  .report-links { display: block; margin-top: 6px; font-size: 12px; color: #555; }
+  .report-links a { color: #1a73e8; white-space: nowrap; }
+
+  /* Feedback link: in the strip below the legend panel, left of the attribution.
+     z-index 1 keeps it under the map controls (2), so an expanded attribution
+     covers it rather than the other way round. Height stays under the 24px
+     scope-note offset. */
+  #feedback-link {
+    position: absolute; z-index: 1; left: 8px;
+    bottom: calc(2px + env(safe-area-inset-bottom));
+    height: 22px; padding: 0 10px; box-sizing: border-box;
+    display: flex; align-items: center;
+    background: rgba(255,255,255,0.96); color: #1a1a1a; text-decoration: none;
+    border-radius: 999px; box-shadow: 0 1px 4px rgba(0,0,0,0.25);
+    font: 12px/1 system-ui, sans-serif;
+  }
+  #feedback-link[hidden] { display: none; }
   .maplibregl-ctrl-top-right { top: env(safe-area-inset-top); }
 
   /* First-visit welcome popup */
@@ -224,6 +241,7 @@
 <div id="loading" hidden>Loading cycling network…</div>
 <div id="error" role="alert"></div>
 <div id="constr-note" role="status"></div>
+<a id="feedback-link" target="_blank" rel="noopener" hidden>Feedback</a>
 
 <div id="welcome" role="dialog" aria-modal="true" aria-labelledby="welcome-title" hidden>
   <div class="card">
@@ -283,7 +301,7 @@
 <div id="signup" role="dialog" aria-labelledby="signup-title" hidden>
   <button id="signup-close" type="button" aria-label="Not now">×</button>
   <form id="signup-form" novalidate>
-    <p id="signup-title"><strong>Want a heads-up when a closure shows up on this route?</strong> Drop your email.</p>
+    <p id="signup-title"><strong>Join the beta.</strong> Get an email when a closure shows up on this route.</p>
     <input type="email" id="signup-email" required placeholder="you@example.com"
            autocomplete="email" inputmode="email" aria-label="Email">
     <fieldset>
@@ -304,14 +322,67 @@
     </label>
     <p class="consent-sub" id="signup-consent-who">GroundTruth Studio · jess.jm.zhang@gmail.com · Unsubscribe any time.</p>
     <div class="signup-actions">
-      <button type="submit" id="signup-submit" disabled>Get closure alerts</button>
+      <button type="submit" id="signup-submit" disabled>Join the beta</button>
       <button type="button" id="signup-skip">Not now</button>
     </div>
-    <p class="fine">Starts a free 14-day trial. Nothing on the map is locked.</p>
+    <p class="fine">Free while in beta. Nothing on the map is locked.</p>
   </form>
   <div id="signup-done" role="status" hidden></div>
 </div>
 <script>
+
+// ===== Reports (prefilled Google Form, no backend) =====
+// Reports are reviewed by hand and never change the map. Only the type and
+// closure ID are prefilled: the note is left for the reporter, and the form's
+// contact fields are never prefilled. If any constant is empty, no report
+// link is shown.
+const REPORT_FORM_URL = 'https://docs.google.com/forms/d/e/1FAIpQLSebA8CAomkUrwtK0KoebWTmoaM1hjn5HLx578RShMBjqCqnQA/viewform';
+const ENTRY_TYPE = 'entry.173245245';         // dropdown: option text must match exactly
+const ENTRY_CLOSURE_ID = 'entry.967901427';   // short text
+const ENTRY_NOTE = 'entry.1781391591';        // paragraph: never prefilled
+const REPORTS_ON = [REPORT_FORM_URL, ENTRY_TYPE, ENTRY_CLOSURE_ID, ENTRY_NOTE].every(Boolean);
+
+function reportUrl(type, closureId) {
+  const params = [];
+  if (type) params.push(ENTRY_TYPE + '=' + encodeURIComponent(type));
+  if (closureId) params.push(ENTRY_CLOSURE_ID + '=' + encodeURIComponent(closureId));
+  return params.length ? REPORT_FORM_URL + '?usp=pp_url&' + params.join('&') : REPORT_FORM_URL;
+}
+
+// The City's GLOBALID, exactly as stored (braces included). Features without
+// one (SF, or Calgary data built before calgary_globalid was kept) fall back
+// to "NAME | start date", NAME being the part of detour_note before " — ".
+function reportClosureId(props) {
+  if (props.calgary_globalid) return String(props.calgary_globalid);
+  const note = props.detour_note || '';
+  const i = note.indexOf(' — ');
+  return `${(i > -1 ? note.slice(0, i) : note) || 'Unnamed closure'} | ${props.start_date || 'unknown'}`;
+}
+
+function appendReportLinks(root, props) {
+  if (!REPORTS_ON) return;
+  const id = reportClosureId(props);
+  const wrap = document.createElement('span');
+  wrap.className = 'report-links';
+  wrap.append('Report: ');
+  ['Still closed', "It's open now", 'Wrong dates'].forEach((type, n) => {
+    if (n) wrap.append(' · ');
+    const a = document.createElement('a');
+    a.href = reportUrl(type, id);
+    a.target = '_blank'; a.rel = 'noopener';
+    a.textContent = type;
+    wrap.appendChild(a);
+  });
+  root.appendChild(wrap);
+}
+
+try {
+  if (REPORTS_ON) {
+    const fb = document.getElementById('feedback-link');
+    fb.href = reportUrl();
+    fb.hidden = false;
+  }
+} catch (e) { console.error('[report] feedback link failed', e); }
 
 const CITIES = {
   calgary: { name: 'Calgary', center: [-114.0719, 51.0447], zoom: 11, timezone: 'America/Edmonton',
@@ -444,6 +515,9 @@ function buildClosurePopup(props) {
   const em = document.createElement('em');
   em.textContent = when;
   root.appendChild(em);
+
+  try { appendReportLinks(root, props); }   // a report-link bug must not break the popup
+  catch (e) { console.error('[report] links failed', e); }
 
   return root;
 }
@@ -1081,9 +1155,10 @@ try {
 const SIGNUP_URL = 'https://script.google.com/macros/s/AKfycbxJ7UAYDDpUQCGJ8hSNmVkuEXa4L6TofjYZ_7aqJnfvquSm4e0TfWCoDQ2z4I3DZAY/exec';   // Apps Script web app /exec URL
 const FORM_VIEW = 'https://docs.google.com/forms/d/e/1FAIpQLSfuigbPPrxlahZllvMG2QisBJ9FC0eUNDpogHytI4XwgHCV1Q/viewform';
 const FORM_ENTRY = { email: 'entry.1045781291', mode: 'entry.134698288', src: 'entry.1872653624' };
-const TRIAL_DAYS = 14, TRIAL_ROUTES = 4, FREE_ROUTES = 2;
+const ROUTE_LIMIT = 4;                     // saved routes per sign-up
+// trialStart / trial_start is the sign-up ("joined at") date; the name matches the sheet column.
 const SIGNUP_KEY = 'gtmSignup';            // { email, mode, trialStart, routes: [key], consentVersion }
-const CONSENT_VERSION = '2026-11-booth-v2';  // bump whenever the consent checkbox wording changes
+const CONSENT_VERSION = '2026-11-booth-v3';  // bump whenever the consent checkbox wording changes
 
 let signupRoute = null;     // { start, end } of the route on screen
 let signupSkipped = false;  // "Not now" this visit: don't pop the sheet again, keep the pill
@@ -1102,11 +1177,6 @@ function signupSave(s) {
 const fmtPt = p => `${p[1].toFixed(5)},${p[0].toFixed(5)}`;   // lat,lng: pastes into any map
 const routeId = r => `${fmtPt(r.start)} to ${fmtPt(r.end)}`;
 const isoDay = d => d.toLocaleDateString('en-CA', { timeZone: CITY.timezone });
-
-function routeLimit(s) {
-  const days = (Date.now() - Date.parse(s.trialStart + 'T00:00:00')) / 864e5;
-  return days < TRIAL_DAYS ? TRIAL_ROUTES : FREE_ROUTES;
-}
 
 // text/plain keeps this a "simple" request: Apps Script can't answer a CORS preflight.
 // `id` is a routeId() string or null; kind is 'signup' | 'add-route' | 'remove-route'.
@@ -1174,11 +1244,11 @@ function signupRefreshPill() {
   } else if (s.routes.includes(routeId(signupRoute))) {
     signupPill.textContent = '🔔 This route is on your alerts ✓';
     signupPill.disabled = true;
-  } else if (s.routes.length >= routeLimit(s)) {
-    signupPill.textContent = `🔔 Route alerts full (${s.routes.length}/${routeLimit(s)})`;
+  } else if (s.routes.length >= ROUTE_LIMIT) {
+    signupPill.textContent = `🔔 Route alerts full (${s.routes.length}/${ROUTE_LIMIT})`;
     signupPill.disabled = true;
   } else {
-    signupPill.textContent = `🔔 Add this route to alerts (${s.routes.length}/${routeLimit(s)})`;
+    signupPill.textContent = `🔔 Add this route to alerts (${s.routes.length}/${ROUTE_LIMIT})`;
   }
   signupPill.hidden = false;
 }
@@ -1228,14 +1298,14 @@ signupForm.addEventListener('submit', async (e) => {
     return;
   } finally {
     signupSyncSubmit();
-    signupSubmit.textContent = 'Get closure alerts';
+    signupSubmit.textContent = 'Join the beta';
   }
   signupSave({
     email, mode, trialStart, routes: route ? [routeId(route)] : [],
     consentVersion: consent.version,
   });
   const p = document.createElement('p');
-  p.textContent = "Thanks! Your 14-day free trial has started. We'll email you if a closure " +
+  p.textContent = "Thanks for joining the beta! We'll email you if a closure " +
     'shows up on this route. Keep exploring, nothing is locked.';
   signupShowDone([p], true);
 });
@@ -1245,7 +1315,7 @@ signupPill.addEventListener('click', async () => {
   const s = signupLoad();
   if (!s) { signupSkipped = false; signupOpen(); return; }
   const route = signupRoute;
-  if (!route || s.routes.length >= routeLimit(s)) return;
+  if (!route || s.routes.length >= ROUTE_LIMIT) return;
   signupPill.disabled = true;
   try {
     // Re-records what was agreed at sign-up; blank for sign-ups saved before CONSENT_VERSION existed.
@@ -1275,7 +1345,7 @@ function alertsRender() {
     s ? 'Legend, layers and alerts' : 'Legend and layers';
   if (!s) return;
   document.getElementById('alerts-email').textContent =
-    `${s.email} · ${s.routes.length}/${routeLimit(s)} routes`;
+    `${s.email} · ${s.routes.length}/${ROUTE_LIMIT} routes`;
   const list = document.getElementById('alerts-routes');
   list.replaceChildren();
   if (!s.routes.length) {
