@@ -9,7 +9,8 @@
 const TAB = 'App sign-ups';
 const HEADERS = ['timestamp', 'email', 'mode', 'src', 'route_start', 'route_end', 'trial_start', 'kind',
                  'consent_text_version'];
-const MODES = ['', 'walk', 'bike', 'drive', 'transit'];
+// `mode` holds how often the person bikes (optional); anything else is stored blank.
+const MODES = ['', 'daily', 'weekly', 'monthly', 'rare'];
 // delete-request comes from web/privacy.html; those rows are processed by hand.
 const KINDS = ['signup', 'add-route', 'remove-route', 'delete-request'];
 // Rows that record what the person agreed to. add-route sends the version saved

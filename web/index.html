@@ -185,11 +185,12 @@
   }
   #signup fieldset { border: 0; margin: 10px 0; padding: 0; }
   #signup legend { padding: 0; margin-bottom: 6px; font-size: 14px; color: #444; }
-  .mode-chips { display: flex; gap: 6px; }
-  .mode-chips label { flex: 1; }
+  /* Bike-frequency chips: 2×2 so the longer labels fit a 360px phone */
+  .mode-chips { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
   .mode-chips input { position: absolute; opacity: 0; pointer-events: none; }
   .mode-chips span {
     display: flex; align-items: center; justify-content: center; min-height: 40px;
+    padding: 2px 8px; box-sizing: border-box; text-align: center; line-height: 1.2;
     border: 1px solid #ccc; border-radius: 999px; font-size: 14px; cursor: pointer;
   }
   .mode-chips input:checked + span { background: #1a1a1a; border-color: #1a1a1a; color: #fff; }
@@ -209,17 +210,15 @@
   #signup .consent-sub { margin: 0 0 10px 26px; font-size: 11px; color: #666; overflow-wrap: anywhere; }
   #signup-done p { margin-bottom: 0; }
   #signup-done a { color: #1a73e8; }
-  /* Compact first ask (small screens): one line, expands to the form */
-  #signup.teaser { padding: 8px 44px 8px 12px; }
-  #signup-teaser { display: flex; align-items: center; gap: 10px; font-size: 14px; }
-  #signup-teaser span { flex: 1; }
-  #signup-expand {
-    min-height: 36px; padding: 0 14px; border: 0; border-radius: 10px;
-    background: #1a1a1a; color: #fff; font: inherit; font-weight: 600; cursor: pointer;
-  }
-  /* Tighter form on phones so more of the route stays visible */
+  /* Phones: at most 40% of the screen, so the route stays visible.
+     The form scrolls inside the sheet; the × stays put. */
   @media (max-width: 600px) {
-    #signup { padding: 10px 12px; font-size: 14px; }
+    #signup {
+      padding: 10px 12px; font-size: 14px;
+      max-height: 40vh; max-height: 40dvh;
+      display: flex; flex-direction: column;
+    }
+    #signup-form, #signup-done { min-height: 0; overflow-y: auto; overscroll-behavior: contain; }
     #signup p { margin-bottom: 6px; }
     #signup-email { min-height: 40px; }
     #signup fieldset { margin: 6px 0; }
@@ -325,21 +324,18 @@
 
 <div id="signup" role="dialog" aria-labelledby="signup-title" hidden>
   <button id="signup-close" type="button" aria-label="Not now">×</button>
-  <div id="signup-teaser" hidden>
-    <span>🔔 Join the beta: get alerts for this route</span>
-    <button type="button" id="signup-expand">Join</button>
-  </div>
   <form id="signup-form" novalidate>
     <p id="signup-title"><strong>Join the beta.</strong> Get an email when a closure shows up on this route.</p>
     <input type="email" id="signup-email" required placeholder="you@example.com"
            autocomplete="email" inputmode="email" aria-label="Email">
     <fieldset>
-      <legend>How do you mostly get around?</legend>
+      <legend>How often do you get around by bike?</legend>
+      <!-- Optional. Values go in the sheet's `mode` column; labels must match BIKE_FREQ. -->
       <div class="mode-chips">
-        <label><input type="radio" name="mode" value="walk"><span>Walk</span></label>
-        <label><input type="radio" name="mode" value="bike"><span>Bike</span></label>
-        <label><input type="radio" name="mode" value="drive"><span>Drive</span></label>
-        <label><input type="radio" name="mode" value="transit"><span>Transit</span></label>
+        <label><input type="radio" name="mode" value="daily"><span>Most days</span></label>
+        <label><input type="radio" name="mode" value="weekly"><span>A few times a week</span></label>
+        <label><input type="radio" name="mode" value="monthly"><span>A few times a month</span></label>
+        <label><input type="radio" name="mode" value="rare"><span>Rarely or never</span></label>
       </div>
     </fieldset>
     <!-- Consent wording is versioned: change CONSENT_VERSION in the script whenever this text changes. -->
@@ -915,7 +911,7 @@ map.on('load', async () => {
   if (BOOTH) {   // land in route planning with the pitch still showing
     planMode = true;
     document.getElementById('plan-btn').textContent = 'Exit route mode';
-    banner.textContent = `${PITCH} Where do you commute, walk or ride? Tap your start point.`;
+    banner.textContent = `${PITCH} Tap your start point`;
   }
 
   map.on('click', async (e) => {
@@ -1187,13 +1183,21 @@ const FORM_ENTRY = { email: 'entry.1045781291', mode: 'entry.134698288', src: 'e
 const ROUTE_LIMIT = 4;                     // saved routes per sign-up
 // trialStart / trial_start is the sign-up ("joined at") date; the name matches the sheet column.
 const SIGNUP_KEY = 'gtmSignup';            // { email, mode, trialStart, routes: [key], consentVersion }
+// `mode` now holds how often the person bikes (optional, '' if skipped). Labels
+// are the button text and the Google Form's option text for the fallback link.
+const BIKE_FREQ = { daily: 'Most days', weekly: 'A few times a week',
+                    monthly: 'A few times a month', rare: 'Rarely or never' };
+const bikeFreq = v => Object.prototype.hasOwnProperty.call(BIKE_FREQ, v) ? v : '';   // old walk/bike/drive/transit -> ''
 const CONSENT_VERSION = '2026-11-booth-v3';  // bump whenever the consent checkbox wording changes
 
 let signupRoute = null;     // { start, end } of the route on screen
 let signupSkipped = false;  // "Not now" this visit: don't pop the sheet again, keep the pill
 
 function signupLoad() {
-  try { return JSON.parse(localStorage.getItem(SIGNUP_KEY)) || null; } catch (e) { return null; }
+  let s;
+  try { s = JSON.parse(localStorage.getItem(SIGNUP_KEY)) || null; } catch (e) { return null; }
+  if (s && typeof s === 'object') s.mode = bikeFreq(s.mode);   // sign-ups saved before the bike question
+  return s;
 }
 function signupSave(s) {
   try {
@@ -1233,11 +1237,10 @@ const signupDone = document.getElementById('signup-done');
 const signupPill = document.getElementById('signup-pill');
 const signupSubmit = document.getElementById('signup-submit');
 const signupConsent = document.getElementById('signup-consent');
-const signupTeaser = document.getElementById('signup-teaser');
 let signupHideTimer = null;
 let signupOfferTimer = null;
 const SIGNUP_DELAY_MS = 3000;   // let the route result sink in before asking
-// Phones get a one-line ask first, and the form keeps the route in view above it.
+// On phones the sheet keeps the route in view above it.
 const SMALL_SCREEN = window.matchMedia('(max-width: 600px)');
 
 // Submit stays disabled until the required consent box is ticked.
@@ -1250,16 +1253,13 @@ function signupClose() {
   signupRefreshPill();
 }
 
-// `teaser`: show only the one-line ask; "Join" expands it to the form.
-function signupOpen(teaser) {
-  signupTeaser.hidden = !teaser;
-  signupEl.classList.toggle('teaser', !!teaser);
-  signupForm.hidden = !!teaser;
+function signupOpen() {
+  signupForm.hidden = false;
   signupDone.hidden = true;
   signupEl.hidden = false;
   signupPill.hidden = true;
   signupSyncSubmit();
-  if (teaser) return;
+  signupForm.scrollTop = 0;
   // On phones, don't pop the keyboard unasked; move the route above the form instead.
   if (SMALL_SCREEN.matches) requestAnimationFrame(signupFitRoute);
   else document.getElementById('signup-email').focus({ preventScroll: true });
@@ -1294,8 +1294,6 @@ if (window.visualViewport) {
 }
 
 function signupShowDone(nodes, autoHide) {
-  signupTeaser.hidden = true;
-  signupEl.classList.remove('teaser');
   signupForm.hidden = true;
   signupDone.replaceChildren(...nodes);
   signupDone.hidden = false;
@@ -1331,7 +1329,7 @@ function signupOffer(start, end) {
   signupOfferTimer = setTimeout(() => {
     // Only if the same route is still on screen and nothing changed meanwhile.
     if (signupRoute === route && signupEl.hidden && !signupSkipped && !signupLoad()) {
-      signupOpen(SMALL_SCREEN.matches);
+      signupOpen();
     } else {
       signupRefreshPill();
     }
@@ -1349,7 +1347,7 @@ function signupFallbackNodes(email, mode) {
   p.append("Couldn't save right now. ");
   const a = document.createElement('a');
   const prefill = { [FORM_ENTRY.email]: email, [FORM_ENTRY.src]: SRC };
-  if (mode) prefill[FORM_ENTRY.mode] = mode[0].toUpperCase() + mode.slice(1);   // form options are "Walk" etc.
+  if (bikeFreq(mode)) prefill[FORM_ENTRY.mode] = BIKE_FREQ[mode];   // form options are the button labels
   a.href = FORM_VIEW + '?usp=pp_url&' + new URLSearchParams(prefill);
   a.target = '_blank'; a.rel = 'noopener';
   a.textContent = 'Use the sign-up form instead';
@@ -1363,7 +1361,7 @@ signupForm.addEventListener('submit', async (e) => {
   const email = input.value.trim();
   if (!input.checkValidity() || !email) { input.reportValidity(); return; }
   if (!signupConsent.checked) { signupConsent.reportValidity(); return; }
-  const mode = (signupForm.querySelector('input[name="mode"]:checked') || {}).value || '';
+  const mode = bikeFreq((signupForm.querySelector('input[name="mode"]:checked') || {}).value);   // optional
   const trialStart = isoDay(new Date());
   const route = signupRoute;
   const consent = { version: CONSENT_VERSION };
@@ -1477,8 +1475,6 @@ document.getElementById('alerts-reset').addEventListener('click', () => {
 });
 
 alertsRender();
-
-document.getElementById('signup-expand').addEventListener('click', () => signupOpen(false));
 
 function signupSkip() { signupSkipped = true; signupClose(); }
 document.getElementById('signup-skip').addEventListener('click', signupSkip);
