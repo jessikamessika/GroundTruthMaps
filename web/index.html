@@ -1168,7 +1168,8 @@ const bowNoteListed = p => BOWNOTE_NAMES.has(closureInfo(p).name.trim().toLowerC
 
 // Text appended to the route banner, or '' when it doesn't apply. Shown when
 // (a) the plain ORS route hits a listed closure, or (b) the displayed route
-// passes within BOWNOTE_NEAR_M of one that's active (any status). Never throws.
+// passes within BOWNOTE_NEAR_M of one that's active (the closure itself, not
+// its posted detour). Never throws.
 function bowNoteText(result, hits, closures) {
   try {
     if (CITY !== CITIES.calgary || !result || !closures) return '';
@@ -1178,7 +1179,7 @@ function bowNoteText(result, hits, closures) {
     for (const f of closures.features) {
       const p = f.properties || {};
       const t = temporalStatus(p);
-      if (t === 'FUTURE' || t === 'PAST' || !bowNoteListed(p)) continue;
+      if (p.status === 'detour' || t === 'FUTURE' || t === 'PAST' || !bowNoteListed(p)) continue;
       const near = turf.buffer(f, BOWNOTE_NEAR_M / 1000, { units: 'kilometers' });
       if (near && turf.booleanIntersects(result.route, near)) return ' ' + BOWNOTE_TEXT;
     }
