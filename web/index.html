@@ -131,6 +131,29 @@
     font: 600 14px/1 system-ui, sans-serif;
   }
   #feedback-link[hidden] { display: none; }
+
+  /* Map attribution: an "i" button at the other end of the same row as
+     Feedback. The credits box sits above that row (8px gap + 36px row + 8px gap
+     = 52px), so it never covers Feedback or the "i". Open on first load,
+     closed by the first touch on the map, then toggled by "i". */
+  #attrib-btn {
+    position: absolute; right: 0; bottom: calc(100% + 8px);
+    width: 36px; height: 36px; padding: 0; border: 0; border-radius: 50%;
+    background: rgba(255,255,255,0.96); color: #1a1a1a; cursor: pointer;
+    box-shadow: 0 1px 4px rgba(0,0,0,0.3);
+    font: italic 700 17px/1 Georgia, serif;
+  }
+  #attrib-pop {
+    position: absolute; right: 0; left: 0; bottom: calc(100% + 52px);
+    max-height: 40vh; overflow-y: auto; box-sizing: border-box;
+    background: rgba(255,255,255,0.98); color: #1a1a1a;
+    border-radius: 11px; box-shadow: 0 1px 6px rgba(0,0,0,0.3);
+    padding: 10px 12px; font: 12px/1.45 system-ui, sans-serif;
+  }
+  #attrib-pop[hidden] { display: none; }
+  #attrib-pop .maplibregl-ctrl-attrib { margin: 0; padding: 0; background: none; }
+  #attrib-pop .maplibregl-ctrl-attrib-button { display: none; }
+  #attrib-pop a { color: #1a73e8; }
   .maplibregl-ctrl-top-right { top: env(safe-area-inset-top); }
 
   /* First-visit welcome popup */
@@ -279,6 +302,9 @@
 
 <div id="panel">
   <a id="feedback-link" target="_blank" rel="noopener" hidden>Feedback</a>
+  <button id="attrib-btn" type="button" aria-label="Map data credits"
+          aria-expanded="false" aria-controls="attrib-pop">i</button>
+  <div id="attrib-pop" role="region" aria-label="Map data credits" hidden></div>
   <button id="panel-toggle" aria-expanded="true">
     <span>Legend and layers</span><span class="chev">▾</span>
   </button>
@@ -443,13 +469,31 @@ const map = new maplibregl.Map({
   center: BOOTH ? VENUE.center : CITY.center,
   zoom: BOOTH ? VENUE.zoom : CITY.zoom,
   maxPitch: 80,
-  attributionControl: {
-    compact: true,
-    customAttribution:
-      '© OpenStreetMap contributors (ODbL) · ' +
-      CITY.attribution
-  }
+  attributionControl: false   // mounted in #attrib-pop below instead of the map corner
 });
+
+// Map credits behind the "i" button. MapLibre's own control still builds the
+// text (and keeps it current as tile, terrain and imagery sources are added);
+// it's just mounted in the popover instead of the bottom-right corner.
+try {
+  const attrib = new maplibregl.AttributionControl({
+    compact: false,
+    customAttribution: '© OpenStreetMap contributors (ODbL) · ' + CITY.attribution
+  });
+  const pop = document.getElementById('attrib-pop');
+  const btn = document.getElementById('attrib-btn');
+  pop.appendChild(attrib.onAdd(map));
+  const setOpen = open => {
+    pop.hidden = !open;
+    btn.setAttribute('aria-expanded', String(open));
+  };
+  btn.addEventListener('click', () => setOpen(pop.hidden));
+  setOpen(true);   // shown on load, like MapLibre's default; any touch on the map closes it
+  ['mousedown', 'touchstart', 'wheel'].forEach(ev => map.on(ev, () => setOpen(false)));
+  document.addEventListener('keydown', e => { if (e.key === 'Escape') setOpen(false); });
+} catch (e) {
+  console.error('[attribution] init failed', e);
+}
 
 map.addControl(new maplibregl.NavigationControl({showCompass: true, visualizePitch: true }), 'top-right');
 map.addControl(new maplibregl.GeolocateControl({
