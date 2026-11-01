@@ -210,12 +210,12 @@
   #signup .consent-sub { margin: 0 0 10px 26px; font-size: 11px; color: #666; overflow-wrap: anywhere; }
   #signup-done p { margin-bottom: 0; }
   #signup-done a { color: #1a73e8; }
-  /* Phones: at most 40% of the screen, so the route stays visible.
+  /* Phones: at most half the screen, so the route stays visible.
      The form scrolls inside the sheet; the × stays put. */
   @media (max-width: 600px) {
     #signup {
       padding: 10px 12px; font-size: 14px;
-      max-height: 40vh; max-height: 40dvh;
+      max-height: 50vh; max-height: 50dvh;
       display: flex; flex-direction: column;
     }
     #signup-form, #signup-done { min-height: 0; overflow-y: auto; overscroll-behavior: contain; }
