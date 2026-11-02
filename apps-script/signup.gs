@@ -17,7 +17,16 @@ const KINDS = ['signup', 'add-route', 'remove-route', 'delete-request'];
 // on the device at sign-up, so it can be blank for sign-ups made before consent
 // versions existed; a new sign-up must carry one.
 const CONSENT_KINDS = ['signup', 'add-route'];
-const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
+// Same rule as emailLooksValid() in web/index.html and web/privacy.html: one @,
+// something before it, a dot inside the domain, no spaces or <>()[],;:"\.
+function emailLooksValid(email) {
+  if (email.length > 254 || /[\s<>()[\],;:"\\]/.test(email)) return false;
+  const at = email.indexOf('@');
+  if (at < 1 || at !== email.lastIndexOf('@')) return false;
+  const domain = email.slice(at + 1);
+  return domain.indexOf('.') > 0 && !domain.endsWith('.');
+}
 
 // Public endpoint: everything is clipped, and a leading = + - @ is quoted so a
 // value can never run as a sheet formula.
@@ -27,7 +36,7 @@ function doPost(e) {
   let d;
   try { d = JSON.parse(e.postData.contents); } catch (err) { return reply({ ok: false, error: 'bad json' }); }
   const email = String(d.email || '').trim();
-  if (email.length > 254 || !EMAIL_RE.test(email)) return reply({ ok: false, error: 'bad email' });
+  if (!emailLooksValid(email)) return reply({ ok: false, error: 'bad email' });
   if (!KINDS.includes(d.kind)) return reply({ ok: false, error: 'bad kind' });
   if (d.kind === 'signup' && !String(d.consent_text_version || '').trim()) {
     return reply({ ok: false, error: 'no consent' });

@@ -206,6 +206,8 @@
     width: 100%; box-sizing: border-box; min-height: 44px; padding: 0 12px;
     border: 1px solid #ccc; border-radius: 10px; font: 16px system-ui, sans-serif;
   }
+  #signup-email[aria-invalid="true"] { border-color: #b3261e; }
+  #signup .field-err { margin: 4px 0 0; font-size: 13px; color: #b3261e; }
   #signup fieldset { border: 0; margin: 10px 0; padding: 0; }
   #signup legend { padding: 0; margin-bottom: 6px; font-size: 14px; color: #444; }
   /* Bike-frequency chips: 2×2 so the longer labels fit a 360px phone */
@@ -249,6 +251,8 @@
     #signup legend { margin-bottom: 4px; font-size: 12px; }
     .mode-chips span { min-height: 32px; font-size: 13px; }
     #signup .consent-sub { margin-bottom: 6px; }
+    /* Pinned to the bottom of the scrolling form, so an email error line can't push it out of view */
+    .signup-actions { position: sticky; bottom: 0; background: #fff; padding-top: 4px; }
     .signup-actions button { min-height: 40px; }
     #signup .fine { margin-top: 4px; font-size: 11px; }
   }
@@ -354,7 +358,8 @@
   <form id="signup-form" novalidate>
     <p id="signup-title"><strong>Join the beta.</strong> Get an email when a closure shows up on this route.</p>
     <input type="email" id="signup-email" required placeholder="you@example.com"
-           autocomplete="email" inputmode="email" aria-label="Email">
+           autocomplete="email" inputmode="email" aria-label="Email" aria-describedby="signup-email-err">
+    <p class="field-err" id="signup-email-err" role="alert" hidden>That email doesn't look right</p>
     <fieldset>
       <legend>How often do you get around by bike?</legend>
       <!-- Optional. Values go in the sheet's `mode` column; labels must match BIKE_FREQ. -->
@@ -1292,7 +1297,20 @@ function signupSave(s) {
   alertsRender();
 }
 
-const fmtPt = p => `${p[1].toFixed(5)},${p[0].toFixed(5)}`;   // lat,lng: pastes into any map
+// Pragmatic email check for every email field; apps-script/signup.gs applies the same rule.
+// One @, something before it, a dot inside the domain, no spaces or <>()[],;:"\.
+// Takes the trimmed value.
+function emailLooksValid(email) {
+  try {
+    if (typeof email !== 'string' || email.length > 254 || /[\s<>()[\],;:"\\]/.test(email)) return false;
+    const at = email.indexOf('@');
+    if (at < 1 || at !== email.lastIndexOf('@')) return false;
+    const domain = email.slice(at + 1);
+    return domain.indexOf('.') > 0 && !domain.endsWith('.');
+  } catch (e) { return false; }
+}
+
+const fmtPt = p =>`${p[1].toFixed(5)},${p[0].toFixed(5)}`;   // lat,lng: pastes into any map
 const routeId = r => `${fmtPt(r.start)} to ${fmtPt(r.end)}`;
 const isoDay = d => d.toLocaleDateString('en-CA', { timeZone: CITY.timezone });
 
@@ -1322,6 +1340,8 @@ const signupDone = document.getElementById('signup-done');
 const signupPill = document.getElementById('signup-pill');
 const signupSubmit = document.getElementById('signup-submit');
 const signupConsent = document.getElementById('signup-consent');
+const signupEmail = document.getElementById('signup-email');
+const signupEmailErr = document.getElementById('signup-email-err');
 let signupHideTimer = null;
 let signupOfferTimer = null;
 const SIGNUP_DELAY_MS = 3000;   // let the route result sink in before asking
@@ -1331,6 +1351,19 @@ const SMALL_SCREEN = window.matchMedia('(max-width: 600px)');
 // Submit stays disabled until the required consent box is ticked.
 function signupSyncSubmit() { signupSubmit.disabled = !signupConsent.checked; }
 signupConsent.addEventListener('change', signupSyncSubmit);
+
+// Inline "That email doesn't look right" under the field. The browser's own
+// validity bubble isn't shown reliably on phones, so it's never relied on.
+function signupEmailError(show) {
+  try {
+    signupEmailErr.hidden = !show;
+    if (show) signupEmail.setAttribute('aria-invalid', 'true');
+    else signupEmail.removeAttribute('aria-invalid');
+    if (show) signupEmailErr.scrollIntoView({ block: 'nearest' });
+    if (show && SMALL_SCREEN.matches) requestAnimationFrame(signupFitRoute);   // the sheet grew
+  } catch (e) { console.error('[signup] email error display failed', e); }
+}
+signupEmail.addEventListener('input', () => { if (!signupEmailErr.hidden) signupEmailError(false); });
 
 function signupClose() {
   signupEl.hidden = true;
@@ -1344,10 +1377,11 @@ function signupOpen() {
   signupEl.hidden = false;
   signupPill.hidden = true;
   signupSyncSubmit();
+  signupEmailError(false);
   signupForm.scrollTop = 0;
   // On phones, don't pop the keyboard unasked; move the route above the form instead.
   if (SMALL_SCREEN.matches) requestAnimationFrame(signupFitRoute);
-  else document.getElementById('signup-email').focus({ preventScroll: true });
+  else signupEmail.focus({ preventScroll: true });
 }
 
 // Fit the route's endpoints into the part of the map the sheet (and the
@@ -1431,7 +1465,8 @@ function signupFallbackNodes(email, mode) {
   const p = document.createElement('p');
   p.append("Couldn't save right now. ");
   const a = document.createElement('a');
-  const prefill = { [FORM_ENTRY.email]: email, [FORM_ENTRY.src]: SRC };
+  const prefill = { [FORM_ENTRY.src]: SRC };
+  if (emailLooksValid(email)) prefill[FORM_ENTRY.email] = email;   // never carry a bad email into the form
   if (bikeFreq(mode)) prefill[FORM_ENTRY.mode] = BIKE_FREQ[mode];   // form options are the button labels
   a.href = FORM_VIEW + '?usp=pp_url&' + new URLSearchParams(prefill);
   a.target = '_blank'; a.rel = 'noopener';
@@ -1442,9 +1477,8 @@ function signupFallbackNodes(email, mode) {
 
 signupForm.addEventListener('submit', async (e) => {
   e.preventDefault();
-  const input = document.getElementById('signup-email');
-  const email = input.value.trim();
-  if (!input.checkValidity() || !email) { input.reportValidity(); return; }
+  const email = signupEmail.value.trim();
+  if (!emailLooksValid(email)) { signupEmailError(true); return; }   // keeps the text, sheet stays open
   if (!signupConsent.checked) { signupConsent.reportValidity(); return; }
   const mode = bikeFreq((signupForm.querySelector('input[name="mode"]:checked') || {}).value);   // optional
   const trialStart = isoDay(new Date());
@@ -1457,7 +1491,8 @@ signupForm.addEventListener('submit', async (e) => {
     await signupSend(email, mode, trialStart, route && routeId(route), 'signup', consent);
   } catch (err) {
     console.error('[signup] send failed:', err);
-    signupShowDone(signupFallbackNodes(email, mode), false);
+    if (err && err.message === 'bad email') signupEmailError(true);   // signup.gs said no
+    else signupShowDone(signupFallbackNodes(email, mode), false);
     return;
   } finally {
     signupSyncSubmit();
@@ -1479,6 +1514,12 @@ signupPill.addEventListener('click', async () => {
   if (!s) { signupSkipped = false; signupOpen(); return; }
   const route = signupRoute;
   if (!route || s.routes.length >= ROUTE_LIMIT) return;
+  if (!emailLooksValid(s.email)) {   // saved before emails were checked: ask for it again
+    signupOpen();
+    signupEmail.value = s.email || '';
+    signupEmailError(true);
+    return;
+  }
   signupPill.disabled = true;
   try {
     // Re-records what was agreed at sign-up; blank for sign-ups saved before CONSENT_VERSION existed.
@@ -1534,8 +1575,12 @@ function alertsRender() {
 async function alertsRemove(id, btn) {
   const s = signupLoad();
   if (!s) return;
-  btn.disabled = true;
   alertsMsg.textContent = '';
+  if (!emailLooksValid(s.email)) {   // saved before emails were checked
+    alertsMsg.textContent = "That email doesn't look right. Tap “Use a different email” to fix it.";
+    return;
+  }
+  btn.disabled = true;
   try {
     await signupSend(s.email, s.mode, s.trialStart, id, 'remove-route');
   } catch (err) {
