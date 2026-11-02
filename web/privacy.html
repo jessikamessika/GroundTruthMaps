@@ -32,6 +32,9 @@
     background: #1a1a1a; color: #fff; font: inherit; font-weight: 600; cursor: pointer;
   }
   #delete-submit:disabled { opacity: 0.6; }
+  #delete-email[aria-invalid="true"] { border-color: #b3261e; }
+  #delete-email-err { margin: -4px 0 10px; font-size: 13px; color: #b3261e; }
+  #delete-email-err[hidden] { display: none; }
   #delete-msg:empty { display: none; }
   #delete-msg { padding: 10px 12px; border-radius: 10px; background: #f3f3f3; }
 </style>
@@ -64,9 +67,10 @@
   <h2 id="delete">Delete my data</h2>
   <form id="delete-form" novalidate>
     <input type="email" id="delete-email" required placeholder="you@example.com"
-           autocomplete="email" inputmode="email" aria-label="Email">
+           autocomplete="email" inputmode="email" aria-label="Email" aria-describedby="delete-email-err">
     <button type="submit" id="delete-submit">Delete my data</button>
   </form>
+  <p id="delete-email-err" role="alert" hidden>That email doesn't look right</p>
   <p id="delete-msg" role="status"></p>
   <p>Or email <a id="delete-mailto"
     href="mailto:jess.jm.zhang@gmail.com?subject=Delete%20my%20data">jess.jm.zhang@gmail.com</a>.</p>
@@ -81,17 +85,40 @@ const form = document.getElementById('delete-form');
 const input = document.getElementById('delete-email');
 const submit = document.getElementById('delete-submit');
 const msg = document.getElementById('delete-msg');
+const emailErr = document.getElementById('delete-email-err');
+
+// Same rule as emailLooksValid() in index.html and apps-script/signup.gs: one @,
+// something before it, a dot inside the domain, no spaces or <>()[],;:"\.
+function emailLooksValid(email) {
+  try {
+    if (typeof email !== 'string' || email.length > 254 || /[\s<>()[\],;:"\\]/.test(email)) return false;
+    const at = email.indexOf('@');
+    if (at < 1 || at !== email.lastIndexOf('@')) return false;
+    const domain = email.slice(at + 1);
+    return domain.indexOf('.') > 0 && !domain.endsWith('.');
+  } catch (e) { return false; }
+}
+
+// Inline error under the field; the browser's validity bubble isn't reliable on phones.
+function showEmailError(show) {
+  emailErr.hidden = !show;
+  if (show) input.setAttribute('aria-invalid', 'true');
+  else input.removeAttribute('aria-invalid');
+}
+input.addEventListener('input', () => showEmailError(false));
 
 function mailtoFor(email) {
-  const body = `Please delete all data stored for ${email}.`;
+  const params = { subject: 'Delete my data' };
+  if (emailLooksValid(email)) params.body = `Please delete all data stored for ${email}.`;
   return 'mailto:jess.jm.zhang@gmail.com?' +
-    new URLSearchParams({ subject: 'Delete my data', body }).toString().replace(/\+/g, '%20');
+    new URLSearchParams(params).toString().replace(/\+/g, '%20');
 }
 
 form.addEventListener('submit', async (e) => {
   e.preventDefault();
   const email = input.value.trim();
-  if (!input.checkValidity() || !email) { input.reportValidity(); return; }
+  if (!emailLooksValid(email)) { showEmailError(true); return; }
+  showEmailError(false);
 
   submit.disabled = true;
   submit.textContent = 'Sending…';
@@ -108,6 +135,7 @@ form.addEventListener('submit', async (e) => {
     if (!res.ok) throw new Error(res.error || 'rejected');
   } catch (err) {
     console.error('[delete] send failed:', err);
+    if (err && err.message === 'bad email') { showEmailError(true); return; }   // signup.gs said no
     msg.replaceChildren("Couldn't send that right now. ");
     const a = document.createElement('a');
     a.href = mailtoFor(email);
