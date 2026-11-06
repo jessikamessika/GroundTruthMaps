@@ -262,6 +262,13 @@
     box-shadow: 0 1px 4px rgba(0,0,0,.3); cursor: pointer;
   }
   #signup-pill:disabled { color: #555; cursor: default; }
+  /* "Sign up for the beta": same look and slot as the alerts pill, shown only with no route */
+  #betaBtn-open {
+    padding: 8px 12px; border-radius: 8px; border: 0;
+    background: #fff; color: #1a1a1a; font: 14px sans-serif;
+    box-shadow: 0 1px 4px rgba(0,0,0,.3); cursor: pointer;
+  }
+  #betaBtn-open[hidden] { display: none; }
 
   /* Manage alerts (inside the legend panel, signed-up devices only) */
   #alerts-manage { border-top: 1px solid #e5e5e5; margin-top: 6px; padding-top: 8px; }
@@ -294,6 +301,7 @@
   <div id="constr-note" role="status"></div>
   <div id="route-banner"></div>
   <button id="signup-pill" type="button" hidden></button>
+  <button id="betaBtn-open" type="button" hidden>⚙️ Sign up for the beta</button>
 </div>
 
 <div id="welcome" role="dialog" aria-modal="true" aria-labelledby="welcome-title" hidden>
@@ -356,7 +364,7 @@
 <div id="signup" role="dialog" aria-labelledby="signup-title" hidden>
   <button id="signup-close" type="button" aria-label="Not now">×</button>
   <form id="signup-form" novalidate>
-    <p id="signup-title"><strong>Join the beta.</strong> Get an email when a closure shows up on this route.</p>
+    <p id="signup-title"><strong>Join the beta.</strong> Get an email when a closure shows up on <span id="betaBtn-tail">this route</span>.</p>
     <input type="email" id="signup-email" required placeholder="you@example.com"
            autocomplete="email" inputmode="email" aria-label="Email" aria-describedby="signup-email-err">
     <p class="field-err" id="signup-email-err" role="alert" hidden>That email doesn't look right</p>
@@ -1378,6 +1386,7 @@ function signupOpen() {
   signupPill.hidden = true;
   signupSyncSubmit();
   signupEmailError(false);
+  betaBtnSync();
   signupForm.scrollTop = 0;
   // On phones, don't pop the keyboard unasked; move the route above the form instead.
   if (SMALL_SCREEN.matches) requestAnimationFrame(signupFitRoute);
@@ -1423,6 +1432,7 @@ function signupShowDone(nodes, autoHide) {
 
 // Shown when the sheet is closed and a route is on screen.
 function signupRefreshPill() {
+  betaBtnSync();
   const s = signupLoad();
   if (!signupRoute || !signupEl.hidden) { signupPill.hidden = true; return; }
   signupPill.disabled = false;
@@ -1443,6 +1453,7 @@ function signupRefreshPill() {
 function signupOffer(start, end) {
   const route = { start, end };
   signupRoute = route;
+  betaBtnSync();   // a route exists now: the beta button goes, even during the 3 s wait
   clearTimeout(signupOfferTimer);
   if (signupLoad() || signupSkipped || !signupEl.hidden) { signupRefreshPill(); return; }
   signupOfferTimer = setTimeout(() => {
@@ -1503,8 +1514,11 @@ signupForm.addEventListener('submit', async (e) => {
     consentVersion: consent.version,
   });
   const p = document.createElement('p');
-  p.textContent = "Thanks for joining the beta! We'll email you if a closure " +
-    'shows up on this route. Keep exploring, nothing is locked.';
+  p.textContent = route
+    ? "Thanks for joining the beta! We'll email you if a closure " +
+      'shows up on this route. Keep exploring, nothing is locked.'
+    : "Thanks for joining the beta! Plan a route and add it to your alerts, and we'll email you " +
+      'if a closure shows up on it. Nothing is locked.';
   signupShowDone([p], true);
 });
 
@@ -1605,6 +1619,25 @@ document.getElementById('alerts-reset').addEventListener('click', () => {
 });
 
 alertsRender();
+
+// ----- "Sign up for the beta" button (no route on screen) -----
+// Shown only when there is no route, the sheet is closed and this device hasn't joined.
+// Everything is wrapped so a failure here can never affect routing, popups or sign-up.
+function betaBtnSync() {
+  try {
+    const btn = document.getElementById('betaBtn-open');
+    const tail = document.getElementById('betaBtn-tail');
+    if (tail) tail.textContent = signupRoute ? 'this route' : 'a route you save';
+    if (!btn) return;
+    btn.hidden = !!signupRoute || !signupEl.hidden || !!signupLoad();
+  } catch (e) { console.error('[betaBtn] sync failed', e); }
+}
+try {
+  document.getElementById('betaBtn-open').addEventListener('click', () => {
+    try { signupSkipped = false; signupOpen(); } catch (e) { console.error('[betaBtn] open failed', e); }
+  });
+  betaBtnSync();
+} catch (e) { console.error('[betaBtn] setup failed', e); }
 
 function signupSkip() { signupSkipped = true; signupClose(); }
 document.getElementById('signup-skip').addEventListener('click', signupSkip);
