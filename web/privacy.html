@@ -37,6 +37,15 @@
   #delete-email-err[hidden] { display: none; }
   #delete-msg:empty { display: none; }
   #delete-msg { padding: 10px 12px; border-radius: 10px; background: #f3f3f3; }
+
+  /* ===== Usage statistics toggle (analytics opt-out) ===== */
+  #gtm-usage-toggle {
+    min-height: 44px; padding: 0 16px; border: 1px solid #ccc; border-radius: 10px;
+    background: #fff; color: #1a1a1a; font: inherit; font-weight: 600; cursor: pointer;
+  }
+  #gtm-usage-toggle[aria-checked="true"] { background: #1a1a1a; border-color: #1a1a1a; color: #fff; }
+  #gtm-usage-toggle:disabled { opacity: 0.6; cursor: default; }
+  /* ===== End usage statistics toggle ===== */
 </style>
 </head>
 <body>
@@ -49,15 +58,26 @@
     <a href="mailto:jess.jm.zhang@gmail.com">jess.jm.zhang@gmail.com</a>.</p>
   <p><strong>What I store:</strong> your email, how often you bike, the start and end points of
     routes you save, where you signed up, timestamps and a record of what you agreed to.
-    Your browser also keeps your email and routes in local storage.</p>
+    Your browser also keeps your email and routes in local storage. It also keeps a random ID and
+    a few settings for usage statistics (see below).
   <p><strong>Why:</strong> to send confirmations and closure alerts.</p>
-  <p><strong>Who sees it:</strong> only me, the founder. Google (Sheets, Apps Script) is my service
-    provider, so data may be stored outside Canada.</p>
+  <p><strong>Who sees it:</strong> only me, the founder. Google (Sheets, Apps Script) is my service provider,
+    so data may be stored outside Canada. PostHog (United States) is my service provider for anonymous usage statistics.</p>
   <p><strong>How long:</strong> 12 months after your last activity, then deleted.</p>
   <p><strong>Reports:</strong> problem reports and feedback are sent through a Google Form. They
     may include a note and, only if you choose to give it, a contact email. I review them by
     hand; they never change the map automatically. Kept up to 12 months; to delete one, use
     the form below or email me.</p>
+  <p><strong>Usage statistics:</strong>to see how the app is used and improve it, I collect anonymous usage events,
+    such as “route planned”, “sign-up sheet shown”, which route result was shown (for example, clear or rerouted)
+    and how you arrived (for example, a QR code). They don't include your email, your route start or end points,
+    closure names, anything you type, or session recordings. If the app crashes, it may send an error report with
+    the type of error and where in the code it happened, never what you typed, your email or your route. To tell
+    a returning visit from a new one, the app keeps a random ID in your browser's storage. It isn't linked to
+    your email or saved routes. PostHog processes these events on servers in the United States. IP addresses
+    are not stored with usage events. Kept up to 12 months. You can turn this off with the switch at the bottom
+    of this page, which also deletes the random ID. The app also doesn't collect usage statistics if your browser
+    sends Do Not Track or Global Privacy Control. The setting is saved in your browser, so clearing site data resets it.</p>
   <p><strong>Your rights:</strong> unsubscribe via any email's link; see, correct or delete your
     data with the form below or by email (within 10 business days); complain to the
     <a href="https://oipc.ab.ca/" target="_blank" rel="noopener">Information and Privacy
@@ -74,6 +94,12 @@
   <p id="delete-msg" role="status"></p>
   <p>Or email <a id="delete-mailto"
     href="mailto:jess.jm.zhang@gmail.com?subject=Delete%20my%20data">jess.jm.zhang@gmail.com</a>.</p>
+
+  <!-- ===== Usage statistics toggle (analytics opt-out) =====
+       Control only. The "Usage statistics" paragraph above refers to this
+       switch as being at the bottom of the page, so keep it here. -->
+  <p><button type="button" id="gtm-usage-toggle" role="switch" aria-checked="true">Usage statistics: on</button></p>
+  <!-- ===== End usage statistics toggle ===== -->
 </main>
 <script>
 // Same Apps Script web app as the sign-up sheet in index.html (apps-script/signup.gs).
@@ -150,6 +176,58 @@ form.addEventListener('submit', async (e) => {
   msg.textContent = "Got it. I'll delete the data for that email within 10 business days " +
     'and may email that address to confirm the request.';
 });
+</script>
+<script>
+// ===== Usage statistics toggle (analytics opt-out) =====
+// Key names must match web/analytics.js. Off = gtm_ph_optout '1' in this
+// browser's local storage, checked before PostHog loads; turning off also
+// deletes the random ID and first/last-seen dates. Per browser and device;
+// clearing this site's data turns statistics back on. With Do Not Track or
+// Global Privacy Control set, or with site storage blocked, nothing is collected,
+// so it shows off and is locked.
+(function () {
+  try {
+    const OPTOUT = 'gtm_ph_optout';
+    const FORGET = ['gtm_ph_id', 'gtm_ph_first_seen', 'gtm_ph_last_seen'];
+    const btn = document.getElementById('gtm-usage-toggle');
+    if (!btn) return;
+    const signal = (() => {
+      try {
+        const n = navigator || {};
+        const dnt = n.doNotTrack || window.doNotTrack || n.msDoNotTrack;
+        return dnt === '1' || dnt === 'yes' || n.globalPrivacyControl === true;
+      } catch (e) { return false; }
+    })();
+    // Blocked storage: analytics.js stays off (it can't honour an opt-out), so show off and lock.
+    const blocked = (() => {
+      try { localStorage.setItem('gtm_ph_probe', '1'); localStorage.removeItem('gtm_ph_probe'); return false; }
+      catch (e) { return true; }
+    })();
+    const isOff = () => { try { return localStorage.getItem(OPTOUT) === '1'; } catch (e) { return true; } };
+    const render = () => {
+      const on = !signal && !blocked && !isOff();
+      btn.textContent = 'Usage statistics: ' + (on ? 'on' : 'off');
+      btn.setAttribute('aria-checked', String(on));
+      btn.disabled = signal || blocked;
+      if (signal) btn.title = 'Your browser sends Do Not Track or Global Privacy Control, so none are collected.';
+      else if (blocked) btn.title = 'Your browser blocks site storage, so none are collected.';
+    };
+    btn.addEventListener('click', () => {
+      try {
+        if (isOff()) {
+          localStorage.removeItem(OPTOUT);
+        } else {
+          localStorage.setItem(OPTOUT, '1');
+          FORGET.forEach(k => localStorage.removeItem(k));
+          try { sessionStorage.removeItem('gtm_ph_session'); } catch (e) {}
+        }
+      } catch (e) { console.error('[usage-stats] toggle failed', e); }
+      render();   // shows what is actually stored, even if saving failed
+    });
+    render();
+  } catch (e) { console.error('[usage-stats] setup failed', e); }
+})();
+// ===== End usage statistics toggle =====
 </script>
 </body>
 </html>

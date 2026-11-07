@@ -14,6 +14,7 @@
 <script src="vendor/maplibre-gl.js"></script>
 <script src="vendor/turf.min.js"></script>
 <script src="routing.js"></script>
+<script src="analytics.js"></script>
 <style>
   html, body { margin: 0; height: 100%; overflow: hidden; }
   #map { position: absolute; inset: 0; }
@@ -436,6 +437,9 @@ function appendReportLinks(root, props) {
     a.href = reportUrl(type, id);
     a.target = '_blank'; a.rel = 'noopener';
     a.textContent = type;
+    a.addEventListener('click', () => {   // analytics: report type only, never the closure
+      try { phTrack('report_link_clicked', { report_type: ['still_closed', 'open_now', 'wrong_dates'][n] }); } catch (e) {}
+    });
     wrap.appendChild(a);
   });
   root.appendChild(wrap);
@@ -469,6 +473,11 @@ const BOOTH = SRC.startsWith('booth-') && CITY === CITIES.calgary;
 const VENUE = { center: [-114.0575156, 51.044078], zoom: 12 };   // booth venue: set before Nov 4
 const PITCH = 'Is your route closed? Find out in 10 seconds.';
 if (BOOTH) document.getElementById('route-banner').textContent = PITCH;
+
+// Usage statistics (web/analytics.js). Loads nothing without a key, with
+// DNT/GPC, or after opt-out on privacy.html. src: booth-* or 'none'.
+try { phInit({ city: CITY === CITIES.sf ? 'sf' : 'calgary', src: SRC }); }
+catch (e) { console.error('[analytics] init failed', e); }
 
 if (!CITY.network) {
   document.getElementById('detour-hint').style.display = 'none';
@@ -992,8 +1001,10 @@ map.on('load', async () => {
       map.getSource('route').setData(route);
 
       if (!closuresData) {                      // fail closed
+        const constrHitsNoClosures = constrRouteHits(route);
         banner.textContent = 'Route shown, but closure data is unavailable. Can\'t check for closures.' +
-          constrRouteNote(constrRouteHits(route));
+          constrRouteNote(constrHitsNoClosures);
+        phRouteShown('unverified', null, constrHitsNoClosures, null);
         return;
       }
 
@@ -1041,13 +1052,17 @@ map.on('load', async () => {
       const prefix = safeRouteMessage(result);
       if (prefix) banner.textContent = prefix + ' ' + banner.textContent;
       banner.textContent += constrRouteNote(constrHits);
-      banner.textContent += bowNoteText(result, hits, closuresData);   // '' unless it applies
+      const bowNote = bowNoteText(result, hits, closuresData);   // '' unless it applies
+      banner.textContent += bowNote;
       // ===== NEW BLOCK ENDS HERE =====
+      phRouteShown(result.status, closedByName.size, constrHits,
+                   bowNote ? () => phBowTrigger(result, hits, closuresData) : null);
       signupOffer(pts[0], pts[1]);   // email ask only once the result is on screen
 
     } catch (err) {
       console.error('Routing error:', err);
       banner.textContent = `Couldn't get a route (${err.message}). Try again.`;
+      try { phTrack('route_failed', {}); } catch (e) {}   // no error text is sent
     }
   });
   // } catch (err) {
@@ -1201,6 +1216,44 @@ function bowNoteText(result, hits, closures) {
     console.error('[bow-note] check failed:', err);
     return '';
   }
+}
+
+// ===== Usage statistics for a rendered route (see web/analytics.js) =====
+// Only called after bowNoteText() returned the notice. Re-checks both of its
+// conditions (bowNoteText stops at the first) to say which one fired.
+// 'plain_route' = (a) the plain route hits a listed closure;
+// 'near_final' = (b) the displayed route passes near an active listed closure.
+function phBowTrigger(result, hits, closures) {
+  try {
+    const plain = result.plain && result.plain[0];
+    const plainHits = !plain ? [] : plain === result.route ? hits : routeCrossesClosures(plain, closures);
+    const a = plainHits.some(h => bowNoteListed(h.feature.properties || {}));
+    let b = false;
+    for (const f of closures.features) {
+      const p = f.properties || {};
+      const t = temporalStatus(p);
+      if (p.status === 'detour' || t === 'FUTURE' || t === 'PAST' || !bowNoteListed(p)) continue;
+      const near = turf.buffer(f, BOWNOTE_NEAR_M / 1000, { units: 'kilometers' });
+      if (near && turf.booleanIntersects(result.route, near)) { b = true; break; }
+    }
+    return a && b ? 'both' : a ? 'plain_route' : b ? 'near_final' : null;
+  } catch (e) { return null; }
+}
+
+// route_planned (+ construction_alert_shown, bow_river_notice_shown) once the
+// banner is on screen. Counts and enums only. Never throws, so it can't stop
+// the sign-up offer that follows it.
+function phRouteShown(status, closuresHit, constrHits, bowTrigger) {
+  try {
+    if (!phOn) return;   // analytics off: skip the extra Bow River geometry work
+    const p = { status };
+    if (Number.isInteger(closuresHit)) p.closures_hit = closuresHit;
+    phTrack('route_planned', p);
+    if (CITY === CITIES.calgary && constrHits && constrHits.length)
+      phTrack('construction_alert_shown', { sites_count: Math.min(5, constrHits.length) });
+    const trigger = bowTrigger && bowTrigger();
+    if (trigger) phTrack('bow_river_notice_shown', { trigger });
+  } catch (e) {}
 }
 
 // Fail closed: anything other than a valid FeatureCollection with a
@@ -1460,6 +1513,7 @@ function signupOffer(start, end) {
     // Only if the same route is still on screen and nothing changed meanwhile.
     if (signupRoute === route && signupEl.hidden && !signupSkipped && !signupLoad()) {
       signupOpen();
+      try { phTrack('signup_sheet_shown', { trigger: 'auto' }); } catch (e) {}
     } else {
       signupRefreshPill();
     }
@@ -1489,7 +1543,11 @@ function signupFallbackNodes(email, mode) {
 signupForm.addEventListener('submit', async (e) => {
   e.preventDefault();
   const email = signupEmail.value.trim();
-  if (!emailLooksValid(email)) { signupEmailError(true); return; }   // keeps the text, sheet stays open
+  if (!emailLooksValid(email)) {   // keeps the text, sheet stays open
+    signupEmailError(true);
+    try { phTrack('signup_failed', { reason: 'invalid_email' }); } catch (e) {}
+    return;
+  }
   if (!signupConsent.checked) { signupConsent.reportValidity(); return; }
   const mode = bikeFreq((signupForm.querySelector('input[name="mode"]:checked') || {}).value);   // optional
   const trialStart = isoDay(new Date());
@@ -1502,6 +1560,7 @@ signupForm.addEventListener('submit', async (e) => {
     await signupSend(email, mode, trialStart, route && routeId(route), 'signup', consent);
   } catch (err) {
     console.error('[signup] send failed:', err);
+    try { phTrack('signup_failed', { reason: phSignupReason(err) }); } catch (e) {}
     if (err && err.message === 'bad email') signupEmailError(true);   // signup.gs said no
     else signupShowDone(signupFallbackNodes(email, mode), false);
     return;
@@ -1509,6 +1568,8 @@ signupForm.addEventListener('submit', async (e) => {
     signupSyncSubmit();
     signupSubmit.textContent = 'Join the beta';
   }
+  // The sheet row is confirmed saved (signup.gs replied ok). Frequency only.
+  try { phTrack('signup_submitted', { bike_freq: mode || 'none' }); } catch (e) {}
   signupSave({
     email, mode, trialStart, routes: route ? [routeId(route)] : [],
     consentVersion: consent.version,
@@ -1525,13 +1586,18 @@ signupForm.addEventListener('submit', async (e) => {
 // Attach the route on screen to an existing sign-up (no re-typing the email).
 signupPill.addEventListener('click', async () => {
   const s = signupLoad();
-  if (!s) { signupSkipped = false; signupOpen(); return; }
+  if (!s) {
+    signupSkipped = false; signupOpen();
+    try { phTrack('signup_sheet_shown', { trigger: 'bell' }); } catch (e) {}
+    return;
+  }
   const route = signupRoute;
   if (!route || s.routes.length >= ROUTE_LIMIT) return;
   if (!emailLooksValid(s.email)) {   // saved before emails were checked: ask for it again
     signupOpen();
     signupEmail.value = s.email || '';
     signupEmailError(true);
+    try { phTrack('signup_sheet_shown', { trigger: 'bell' }); } catch (e) {}
     return;
   }
   signupPill.disabled = true;
@@ -1548,6 +1614,7 @@ signupPill.addEventListener('click', async () => {
   s.routes.push(routeId(route));
   signupSave(s);
   signupRefreshPill();
+  try { phTrack('route_added', { routes_saved: s.routes.length }); } catch (e) {}   // count only
 });
 
 // ----- Manage alerts (legend panel) -----
@@ -1606,6 +1673,7 @@ async function alertsRemove(id, btn) {
   s.routes = s.routes.filter(r => r !== id);
   signupSave(s);
   signupRefreshPill();
+  try { phTrack('route_removed', { routes_saved: s.routes.length }); } catch (e) {}   // count only
 }
 
 document.getElementById('alerts-reset').addEventListener('click', () => {
@@ -1615,7 +1683,10 @@ document.getElementById('alerts-reset').addEventListener('click', () => {
   alertsMsg.textContent = '';
   signupSkipped = false;
   signupForm.reset();
-  if (signupRoute) signupOpen(); else signupRefreshPill();
+  if (signupRoute) {
+    signupOpen();
+    try { phTrack('signup_sheet_shown', { trigger: 'change_email' }); } catch (e) {}
+  } else signupRefreshPill();
 });
 
 alertsRender();
@@ -1635,6 +1706,7 @@ function betaBtnSync() {
 try {
   document.getElementById('betaBtn-open').addEventListener('click', () => {
     try { signupSkipped = false; signupOpen(); } catch (e) { console.error('[betaBtn] open failed', e); }
+    try { phTrack('signup_sheet_shown', { trigger: 'beta_button' }); } catch (e) {}
   });
   betaBtnSync();
 } catch (e) { console.error('[betaBtn] setup failed', e); }
