@@ -26,7 +26,7 @@
 
 // Paste the PUBLIC project key (starts with phc_) from PostHog > Settings >
 // Project > General > Project API key. Empty = analytics off, nothing loads.
-const PH_KEY = '';
+const PH_KEY = 'phc_D3ZKSdgP3Z4q2cprqVyqQf6syebfm9cJre9aTx43N38n';
 const PH_HOST = 'https://us.i.posthog.com';
 const PH_SDK_SRC = 'vendor/posthog-js-1.438.21.full.no-external.js';
 
