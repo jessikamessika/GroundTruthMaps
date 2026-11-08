@@ -6,6 +6,7 @@ import UpdatedPill from '../components/UpdatedPill.jsx';
 import WelcomeDialog from '../components/WelcomeDialog.jsx';
 import LegendPanel from '../components/LegendPanel.jsx';
 import SignupSheet from '../components/SignupSheet.jsx';
+import RouteSearch from '../components/RouteSearch.jsx';
 
 const INITIAL_LAYERS = {
   network: true, unconfirmed: true, current: true, future: true,
@@ -32,7 +33,6 @@ export default function App() {
   const [banner, setBanner] = useState(BOOTH ? PITCH : '');
   const [routingReady, setRoutingReady] = useState(false);
   const [planMode, setPlanMode] = useState(false);
-  // Not shown yet; kept for upcoming endpoint UI.
   const [endpoints, setEndpoints] = useState({ start: null, end: null });
 
   const signup = useSignup(controller);
@@ -113,6 +113,8 @@ export default function App() {
       {/* Left column below the top row; stops short of the map controls on the right.
           The map stays tappable between the items. */}
       <div className="pointer-events-none fixed top-[calc(env(safe-area-inset-top,0px)+52px)] right-[49px] left-2 z-5 flex flex-col items-start gap-1.5 *:pointer-events-auto *:max-w-full">
+        {/* Hidden, not removed, under the sign-up sheet: the sheet's route fit assumes a clear top. */}
+        {planMode && <RouteSearch controller={controller} endpoints={endpoints} hidden={signup.sheet.open} />}
         {loading && <div className={`${pill} bg-white/96 text-ink shadow-pill`}>Loading cycling network…</div>}
         {constr.bad && (
           <div role="status" className={`${pill} border border-danger-line bg-danger-bg text-danger-ink`}>{constr.msg}</div>

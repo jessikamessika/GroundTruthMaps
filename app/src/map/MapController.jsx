@@ -119,6 +119,8 @@ export class MapController {
     this.routeDrawn = false;   // a route line for the current endpoints is on the map
     this.locating = { start: null, end: null };   // the location lookup in progress for each end, or null
     this.routeBanner = '';   // the last message about the current pair of endpoints
+    this.tapTarget = 'end';   // the end a map tap fills
+    this.locatedEnd = null;   // the end being set from the device location, while it's set
     this.closuresData = null;
     this.generatedAt = null;
     this.constrData = null;
@@ -221,6 +223,16 @@ export class MapController {
   getEndpoints() {
     const copy = p => (p ? [p[0], p[1]] : null);
     return { start: copy(this.ends.start), end: copy(this.ends.end) };
+  }
+
+  // Which end a map tap fills.
+  setTapTarget(which) {
+    checkWhich(which);
+    this.tapTarget = which;
+  }
+
+  isLocating() {
+    return !!(this.locating.start || this.locating.end);
   }
 
   // Set one end from the device location, in route mode. Replaces a point
@@ -591,7 +603,9 @@ export class MapController {
           if (pos.coords.accuracy > MAX_LOCATION_ACCURACY_M) {
             return failed('low_accuracy', 'low-accuracy', "Your location isn't precise enough.");
           }
+          this.locatedEnd = which;
           this.setEndpoint(which, here);
+          this.locatedEnd = null;
           finish('success');
         },
         (err) => {
@@ -651,14 +665,12 @@ export class MapController {
   }
 
   _emitEndpoints() {
-    this.cb().onEndpointsChanged?.(this.getEndpoints());
+    this.cb().onEndpointsChanged?.({ ...this.getEndpoints(), locatedEnd: this.locatedEnd });
   }
 
   _onRouteClick(e) {
     if (!this.planMode) return;
-    const p = [e.lngLat.lng, e.lngLat.lat];
-    if (this.ends.start && this.ends.end) this._resetRoute();   // third tap starts over, as before
-    this.setEndpoint(this.ends.start ? 'end' : 'start', p);
+    this.setEndpoint(this.tapTarget, [e.lngLat.lng, e.lngLat.lat]);
   }
 
   async _planCurrentRoute() {
@@ -732,7 +744,9 @@ export class MapController {
       }
       const prefix = safeRouteMessage(result);
       if (prefix) text = prefix + ' ' + text;
-      text += constrRouteNote(constrHits);
+      const constrNote = constrRouteNote(constrHits);
+      if (constrHits === null && constrNote && !text.endsWith('.')) text += '.';
+      text += constrNote;
       const bowNote = bowNoteText(result, hits, closuresData);   // '' unless it applies
       text += bowNote;
       banner(text);
