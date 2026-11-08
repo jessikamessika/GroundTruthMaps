@@ -34,27 +34,27 @@ jobs:
 
       - name: Refresh closures from City of Calgary
         # Exit 0 = success (real closures written, or City genuinely reports zero).
-        # Exit 1 = fetch failed; closures.geojson was left untouched and the
+        # Exit 1 = fetch failed; app/public/data/closures.geojson was left untouched and the
         #          run goes red so a human investigates.
-        run: python3 Scraping/refresh_closures.py
+        run: python3 api/scraping/refresh_closures.py
 
       - name: Run doctor preflight
-        # doctor.py exits 1 on any error-severity failure, which fails the
+        # api/doctor.py exits 1 on any error-severity failure, which fails the
         # job before we commit a bad file. DATA-002 (staleness warning) is
         # severity=warning and will NOT fail the run.
-        run: python3 doctor.py
+        run: python3 api/doctor.py
 
       - name: Commit and push if closures changed
         run: |
           set -euo pipefail
 
-          if git diff --quiet data/closures.geojson; then
+          if git diff --quiet app/public/data/closures.geojson; then
             echo "No change in closures.geojson; nothing to commit."
             exit 0
           fi
 
           git config user.name  "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add data/closures.geojson
+          git add app/public/data/closures.geojson
           git commit -m "Refresh pathway closures ($(date -u +%Y-%m-%dT%H:%MZ))"
           git push

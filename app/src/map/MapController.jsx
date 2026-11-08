@@ -1,0 +1,619 @@
+// Imperative MapLibre side of the app: map, layers, popups and route planning.
+// React owns everything around the map and talks to this class through
+// `getCallbacks()` (always the latest handlers) and a few public methods.
+import * as maplibregl from 'maplibre-gl';   // v6 is ESM with named exports only
+// v6 derives its worker URL from its own import.meta.url at runtime, which a
+// bundler can't see. Import the (self-contained) worker as an asset instead.
+import maplibreWorkerUrl from 'maplibre-gl/dist/maplibre-gl-worker.mjs?url';
+maplibregl.setWorkerUrl(maplibreWorkerUrl);
+import * as turf from '@turf/turf';
+import { createRoot } from 'react-dom/client';
+import { flushSync } from 'react-dom';
+
+import {
+  BOOTH, CITY, CLOSURES_URL, NETWORK_URL, OSM_ATTRIBUTION, PITCH, VENUE,
+} from '../core/config.js';
+import {
+  closureInfo, fetchPlainRoute, planSafeRoutes, refreshTemporal, routeCrossesClosures,
+  safeRouteMessage, temporalStatus,
+} from '../core/routing.js';
+import { constrRouteHits, constrRouteNote, fetchConstruction, constrFmtFetched } from '../core/construction.js';
+import { bowNoteText, phBowTrigger } from '../core/bowNote.js';
+import { phIsOn, phTrack } from '../core/analytics.js';
+import { ClosurePopup, ConstructionPopup } from './Popups.jsx';
+
+const STYLE_URL = 'https://tiles.openfreemap.org/styles/liberty';
+
+const CLOSURE_LAYERS = ['closures-current', 'closures-future', 'closures-detour',
+                        'closures-reduced-current', 'closures-reduced-future'];
+const BUILDING_LAYER = 'building-3d';
+
+// 3D barrier walls over full closures
+const WALL_SOURCE = 'closure-walls';
+const WALL_LAYER = 'closure-walls-3d';
+const WALL_BUFFER_M = 6;           // narrower than the routing buffer (15) so it reads as a wall, not a slab
+const WALL_HEIGHT_CURRENT = 100;   // metres
+const WALL_HEIGHT_FUTURE = 10;
+
+const CONSTR_SOURCE = 'construction';
+const CONSTR_LAYER = 'constr-points';
+
+// Legend checkbox -> map layers it controls (network is handled separately).
+const LAYER_GROUPS = {
+  current: ['closures-current'],
+  future: ['closures-future'],
+  detour: ['closures-detour'],
+  reduced: ['closures-reduced-current', 'closures-reduced-future'],
+  construction: [CONSTR_LAYER],
+};
+
+const HIT = 10;   // fat-finger tolerance (px) around a tap on thin closure lines
+
+const emptyFC = () => ({ type: 'FeatureCollection', features: [] });
+
+// Distance in screen pixels from point p to segment a-b
+function segDist(p, a, b) {
+  const dx = b.x - a.x, dy = b.y - a.y;
+  const len2 = dx * dx + dy * dy;
+  const t = len2 ? Math.max(0, Math.min(1, ((p.x - a.x) * dx + (p.y - a.y) * dy) / len2)) : 0;
+  return Math.hypot(p.x - (a.x + t * dx), p.y - (a.y + t * dy));
+}
+
+// Full closures only (status 'closed'), current or future. PAST, detour and reduced are skipped.
+function buildWallData(closures) {
+  const out = [];
+  for (const f of closures.features) {
+    try {                                     // one bad geometry must not drop every wall
+      const p = f.properties || {};
+      const info = closureInfo(p);
+      if (info.kind !== 'closed') continue;
+      const t = temporalStatus(p);
+      if (t === 'PAST') continue;
+      const poly = turf.buffer(f, WALL_BUFFER_M / 1000, { units: 'kilometers' });
+      if (!poly || !poly.geometry) continue;
+      const future = t === 'FUTURE';
+      out.push({
+        type: 'Feature',
+        geometry: poly.geometry,
+        properties: {
+          ...p,                       // status, detour_note, start/end dates, window fields: what the popup reads
+          name: info.name,
+          future,
+          lapsed: !future && info.pastEndDate,
+          h: future ? WALL_HEIGHT_FUTURE : WALL_HEIGHT_CURRENT,
+        },
+      });
+    } catch (e) { console.warn('wall skipped', e); }
+  }
+  return { type: 'FeatureCollection', features: out };
+}
+
+export class MapController {
+  constructor({ container, attribEl, getCallbacks, layers }) {
+    this.cb = getCallbacks;
+    this.layers = layers;
+    this.planMode = false;
+    this.pts = [];
+    this.markers = [];
+    this.closuresData = null;
+    this.generatedAt = null;
+    this.constrData = null;
+    this.is3D = false;
+    this.timers = [];
+
+    const map = this.map = new maplibregl.Map({
+      container,
+      style: STYLE_URL,
+      center: BOOTH ? VENUE.center : CITY.center,
+      zoom: BOOTH ? VENUE.zoom : CITY.zoom,
+      maxPitch: 80,
+      attributionControl: false,   // mounted in the legend's credits popover instead
+    });
+
+    // Map credits behind the "i" button. MapLibre's own control still builds the
+    // text (and keeps it current as sources are added); it's just mounted in the
+    // React popover instead of the map corner.
+    try {
+      this.attrib = new maplibregl.AttributionControl({
+        compact: false,
+        customAttribution: OSM_ATTRIBUTION + ' · ' + CITY.attribution,
+      });
+      attribEl.appendChild(this.attrib.onAdd(map));
+      ['mousedown', 'touchstart', 'wheel'].forEach(ev =>
+        map.on(ev, () => this.cb().onMapTouched?.()));
+    } catch (e) {
+      console.error('[attribution] init failed', e);
+    }
+
+    map.addControl(new maplibregl.NavigationControl({ showCompass: true, visualizePitch: true }), 'top-right');
+    map.addControl(new maplibregl.GeolocateControl({
+      positionOptions: { enableHighAccuracy: true },
+      trackUserLocation: true,
+      showUserLocation: true,
+    }), 'top-right');
+    map.addControl(this._toggle3DControl(), 'top-right');
+
+    map.on('load', () => this._onLoad());
+    if (CITY.construction) map.on('load', () => this._loadConstruction());
+  }
+
+  destroy() {
+    this.timers.forEach(clearInterval);
+    try { this.attrib?.onRemove(); } catch (e) {}
+    this.map.remove();
+  }
+
+  // ----- Public API used by React -----
+
+  // layers: { network, unconfirmed, current, future, detour, reduced, construction }
+  setLayers(layers) {
+    this.layers = layers;
+    this._applyLayers();
+  }
+
+  setPlanMode(on) {
+    this.planMode = on;
+    if (this.routingReady) this._resetRoute();
+  }
+
+  fitBounds(bounds, options) {
+    this.map.fitBounds(bounds, options);
+  }
+
+  // ----- Layer visibility -----
+
+  _setVis(ids, on) {   // ignores layers that haven't loaded yet
+    ids.forEach(id => {
+      if (this.map.getLayer(id)) this.map.setLayoutProperty(id, 'visibility', on ? 'visible' : 'none');
+    });
+  }
+
+  _applyLayers() {
+    const l = this.layers;
+    for (const [key, ids] of Object.entries(LAYER_GROUPS)) this._setVis(ids, l[key]);
+    this._setVis(['network-confirmed'], l.network);
+    this._setVis(['network-unconfirmed'], l.network && l.unconfirmed);
+  }
+
+  // ----- 3D / satellite -----
+
+  _toggle3DControl() {
+    const ctrl = this;
+    return {
+      onAdd() {
+        this.el = document.createElement('div');
+        this.el.className = 'maplibregl-ctrl maplibregl-ctrl-group';
+        const mk = (label, fn) => {
+          const b = document.createElement('button');
+          b.type = 'button'; b.textContent = label; b.onclick = fn;
+          this.el.appendChild(b);
+        };
+        mk('3D', () => ctrl._set3D(!ctrl.is3D));
+        let sat = false;
+        mk('Sat', () => {
+          sat = !sat;
+          ctrl.map.setLayoutProperty('satellite', 'visibility', sat ? 'visible' : 'none');
+        });
+        return this.el;
+      },
+      onRemove() { this.el.remove(); },
+    };
+  }
+
+  _set3D(on) {
+    const map = this.map;
+    try {
+      map.setTerrain(on ? { source: 'dem', exaggeration: 1.5 } : null);
+      map.once('idle', () => map.easeTo({ pitch: on ? 65 : 0, duration: 800 }));
+      this.is3D = on;
+    } catch (e) { console.error('3D toggle failed', e); }
+
+    // Buildings and walls: separate try/catch so one failure can't undo the terrain toggle
+    for (const id of [BUILDING_LAYER, WALL_LAYER]) {
+      try {
+        if (map.getLayer(id)) map.setLayoutProperty(id, 'visibility', on ? 'visible' : 'none');
+      } catch (e) { console.error(`${id} toggle failed`, e); }
+    }
+  }
+
+  _init3D() {
+    const map = this.map;
+    try {
+      map.addSource('dem', {
+        type: 'raster-dem',
+        tiles: ['https://s3.amazonaws.com/elevation-tiles-prod/terrarium/{z}/{x}/{y}.png'],
+        encoding: 'terrarium',
+        tileSize: 256,
+        maxzoom: 15,
+        attribution: 'Terrain: Mapzen / AWS Terrain Tiles',
+      });
+      map.addSource('satellite', {
+        type: 'raster',
+        tiles: ['https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}'],
+        tileSize: 256,
+        maxzoom: 19,
+        attribution: 'Imagery © Esri, Maxar, Earthstar Geographics',
+      });
+      map.addLayer({ id: 'satellite', type: 'raster', source: 'satellite', layout: { visibility: 'none' } });
+    } catch (e) { console.error('3D init failed', e); }
+
+    // Buildings: hidden until 3D mode, and moved above the satellite layer
+    try {
+      if (map.getLayer(BUILDING_LAYER)) {
+        map.moveLayer(BUILDING_LAYER);   // no beforeId = top of the stack so far
+        map.setLayoutProperty(BUILDING_LAYER, 'visibility', 'none');
+      } else {
+        console.warn('building-3d layer not found; skipping 3D buildings');
+      }
+    } catch (e) { console.error('3D buildings init failed', e); }
+  }
+
+  _initWalls() {
+    try {
+      this.map.addSource(WALL_SOURCE, { type: 'geojson', data: buildWallData(this.closuresData) });
+      this.map.addLayer({
+        id: WALL_LAYER, type: 'fill-extrusion', source: WALL_SOURCE,
+        layout: { visibility: this.is3D ? 'visible' : 'none' },
+        paint: {
+          'fill-extrusion-height': ['get', 'h'],
+          'fill-extrusion-base': 0,
+          'fill-extrusion-opacity': 0.55,
+          'fill-extrusion-color': ['case',
+            ['get', 'lapsed'], '#f59e0b',      // past listed end date: amber
+            ['get', 'future'], '#f4a4b4',      // upcoming: muted pink
+            '#e11d48'],                        // closed now: red
+        },
+      });
+    } catch (e) { console.error('Closure walls init failed', e); }
+  }
+
+  _updateWalls() {
+    try {
+      const src = this.map.getSource(WALL_SOURCE);
+      if (src && this.closuresData) src.setData(buildWallData(this.closuresData));
+    } catch (e) { console.error('Wall update failed', e); }
+  }
+
+  // ----- Popups (React components rendered into the MapLibre popup) -----
+
+  _showPopup(lngLat, element) {
+    const node = document.createElement('div');
+    const root = createRoot(node);
+    flushSync(() => root.render(element));   // content must exist before MapLibre measures it
+    const popup = new maplibregl.Popup({ maxWidth: '240px' })
+      .setLngLat(lngLat)
+      .setDOMContent(node)
+      .addTo(this.map);
+    popup.on('close', () => setTimeout(() => root.unmount()));
+  }
+
+  // ----- Hit testing -----
+
+  _closuresNear(point) {
+    // Only query the wall layer if it exists; querying a missing layer makes the whole call fail
+    const layers = this.map.getLayer(WALL_LAYER) ? [...CLOSURE_LAYERS, WALL_LAYER] : CLOSURE_LAYERS;
+    return this.map.queryRenderedFeatures(
+      [[point.x - HIT, point.y - HIT], [point.x + HIT, point.y + HIT]],
+      { layers });
+  }
+
+  // Of the features in the hit box, return the one whose line is nearest the tap
+  _nearestFeature(point, feats) {
+    let best = feats[0], bestD = Infinity;
+    for (const f of feats) {
+      const g = f.geometry;
+      const lines = g.type === 'LineString' ? [g.coordinates]
+                  : g.type === 'MultiLineString' ? g.coordinates : [];
+      for (const line of lines) {
+        for (let i = 0; i < line.length - 1; i++) {
+          const d = segDist(point, this.map.project(line[i]), this.map.project(line[i + 1]));
+          if (d < bestD) { bestD = d; best = f; }
+        }
+      }
+    }
+    return best;
+  }
+
+  // True if a construction dot is under the pointer. Same exact-point test as the
+  // layer click handler, so the pointer only shows where a click opens a popup.
+  _constrUnder(point) {
+    try {
+      return !!this.map.getLayer(CONSTR_LAYER) &&
+        this.map.queryRenderedFeatures(point, { layers: [CONSTR_LAYER] }).length > 0;
+    } catch (e) { return false; }
+  }
+
+  // ----- Load sequence -----
+
+  async _onLoad() {
+    const map = this.map;
+    const cb = () => this.cb();
+    this._init3D();   // DEM + satellite source/layer first
+
+    // 1. Closures first: small, and the point of the app
+    try {
+      const r = await fetch(CLOSURES_URL);
+      if (!r.ok) throw new Error('closures HTTP ' + r.status);
+      const closures = await r.json();
+      refreshTemporal(closures);   // live CURRENT/FUTURE/PAST from the UTC window
+      this.closuresData = closures;
+      this.generatedAt = closures.generated;
+      map.addSource('closures', { type: 'geojson', data: closures });
+      cb().onClosuresLoaded?.({
+        generated: closures.generated,
+        scopeNote: closures.scope_note || '',
+        hasReduced: closures.features.some(f => f.properties.status === 'reduced'),
+      });
+    } catch (err) {
+      console.error(err);
+      cb().onError?.('Could not load closure data. Check your connection and reload.');
+      return;
+    }
+
+    map.addLayer({ id: 'closures-current', type: 'line', source: 'closures',
+      filter: ['all', ['==', ['get', 'status'], 'closed'], ['==', ['get', 'calgary_temporal_status'], 'CURRENT']],
+      paint: { 'line-color': '#e11d48', 'line-width': 4 } });
+    map.addLayer({ id: 'closures-future', type: 'line', source: 'closures',
+      filter: ['all', ['==', ['get', 'status'], 'closed'], ['==', ['get', 'calgary_temporal_status'], 'FUTURE']],
+      paint: { 'line-color': '#e11d48', 'line-width': 4, 'line-opacity': 0.4, 'line-dasharray': [2, 2] } });
+    map.addLayer({ id: 'closures-detour', type: 'line', source: 'closures',
+      filter: ['==', ['get', 'status'], 'detour'],
+      paint: { 'line-color': '#7c3aed', 'line-width': 3, 'line-dasharray': [2, 1] } });
+    // Lane restrictions: amber, drawn under the red full closures
+    map.addLayer({ id: 'closures-reduced-current', type: 'line', source: 'closures',
+      filter: ['all', ['==', ['get', 'status'], 'reduced'], ['==', ['get', 'calgary_temporal_status'], 'CURRENT']],
+      paint: { 'line-color': '#f59e0b', 'line-width': 3 } }, 'closures-current');
+    map.addLayer({ id: 'closures-reduced-future', type: 'line', source: 'closures',
+      filter: ['all', ['==', ['get', 'status'], 'reduced'], ['==', ['get', 'calgary_temporal_status'], 'FUTURE']],
+      paint: { 'line-color': '#f59e0b', 'line-width': 3, 'line-opacity': 0.5, 'line-dasharray': [2, 2] } }, 'closures-current');
+    this._applyLayers();   // honor checkboxes toggled while loading
+
+    // Re-evaluate current/upcoming against the clock every minute
+    this.timers.push(setInterval(() => {
+      if (refreshTemporal(this.closuresData)) {
+        map.getSource('closures').setData(this.closuresData);
+        this._updateWalls();
+      }
+    }, 60000));
+
+    this._initWalls();
+
+    map.on('click', (e) => {
+      if (this.planMode) return;
+      const hits = this._closuresNear(e.point);
+      if (!hits.length) return;
+      // A wall under the tap wins, so tapping a wall doesn't open the detour behind it.
+      // Walls are polygons, so nearestFeature (which measures line segments) only applies to line hits.
+      const wallHit = hits.find(f => f.layer && f.layer.id === WALL_LAYER);
+      const pick = wallHit || this._nearestFeature(e.point, hits);
+      this._showPopup(e.lngLat, <ClosurePopup props={pick.properties} />);
+    });
+
+    // Pointer cursor on desktop (no-op on touch)
+    map.on('mousemove', (e) => {
+      map.getCanvas().style.cursor =
+        (this._closuresNear(e.point).length || this._constrUnder(e.point)) ? 'pointer' : '';
+    });
+
+    // 2. Network in the background, inserted beneath the closure layers
+    if (CITY.network) {
+      cb().onLoading?.(true);
+      try {
+        const r = await fetch(NETWORK_URL);
+        if (!r.ok) throw new Error('network HTTP ' + r.status);
+        const network = await r.json();
+        map.addSource('network', { type: 'geojson', data: network });
+        map.addLayer({ id: 'network-confirmed', type: 'line', source: 'network',
+          filter: ['==', ['get', 'bicycle_access'], 'designated'],
+          paint: { 'line-color': '#7a8ca5', 'line-width': 1.5, 'line-opacity': 0.7 } }, 'closures-current');
+        map.addLayer({ id: 'network-unconfirmed', type: 'line', source: 'network',
+          filter: ['!=', ['get', 'bicycle_access'], 'designated'],
+          paint: { 'line-color': '#7a8ca5', 'line-width': 1, 'line-opacity': 0.2 } }, 'closures-current');
+        this._applyLayers();   // honor checkboxes toggled while loading
+      } catch (err) {
+        console.error(err);
+        cb().onError?.('Closures loaded, but the cycling network could not be loaded.');
+      } finally {
+        cb().onLoading?.(false);
+      }
+    }
+
+    this._initRouting();
+  }
+
+  // ----- Route planning -----
+
+  _initRouting() {
+    const map = this.map;
+    map.addSource('route', { type: 'geojson', data: emptyFC() });
+    map.addSource('route-hits', { type: 'geojson', data: emptyFC() });
+    map.addLayer({ id: 'route-line', type: 'line', source: 'route',
+      paint: { 'line-color': '#1a73e8', 'line-width': 5.7, 'line-opacity': 1 } });
+    map.addLayer({ id: 'route-hits', type: 'line', source: 'route-hits',
+      filter: ['!', ['get', 'possible']],
+      paint: { 'line-color': ['case', ['get', 'lapsed'], '#f29900', '#d93025'],
+               'line-width': 9, 'line-opacity': 0.9 } });
+    // Lane restrictions: dashed amber, so they read as "maybe", not "blocked"
+    map.addLayer({ id: 'route-hits-possible', type: 'line', source: 'route-hits',
+      filter: ['get', 'possible'],
+      paint: { 'line-color': '#f59e0b', 'line-width': 9, 'line-opacity': 0.9,
+               'line-dasharray': [1.5, 1.5] } });
+
+    this.routingReady = true;
+    if (BOOTH) {   // land in route planning with the pitch still showing
+      this.planMode = true;
+      this.cb().onBanner?.(`${PITCH} Tap your start point`);
+    }
+    this.cb().onRoutingReady?.({ planMode: this.planMode });
+
+    map.on('click', (e) => this._onRouteClick(e));
+  }
+
+  _resetRoute() {
+    this.pts = [];
+    this.markers.forEach(m => m.remove());
+    this.markers = [];
+    this.map.getSource('route').setData(emptyFC());
+    this.map.getSource('route-hits').setData(emptyFC());
+    this.cb().onBanner?.(this.planMode ? 'Tap your start point' : '');
+    this.cb().onRouteCleared?.();
+  }
+
+  async _onRouteClick(e) {
+    if (!this.planMode) return;
+    const map = this.map;
+    const banner = text => this.cb().onBanner?.(text);
+    if (this.pts.length === 2) this._resetRoute();
+    const pts = this.pts;
+    pts.push([e.lngLat.lng, e.lngLat.lat]);
+    this.markers.push(new maplibregl.Marker({ color: pts.length === 1 ? '#188038' : '#d93025' })
+      .setLngLat(e.lngLat).addTo(map));
+    if (pts.length === 1) { banner('Tap your destination'); return; }
+
+    banner('Routing…');
+    const closuresData = this.closuresData;
+    try {
+      let route, result = null;
+      if (closuresData) {
+        result = await planSafeRoutes(pts[0], pts[1], closuresData);
+        route = result.route;
+      } else {
+        route = await fetchPlainRoute(pts[0], pts[1]);
+      }
+      if (this.pts !== pts) return;   // route was reset while waiting
+      map.getSource('route').setData(route);
+
+      if (!closuresData) {                      // fail closed
+        const constrHitsNoClosures = constrRouteHits(route, this.constrData);
+        banner('Route shown, but closure data is unavailable. Can\'t check for closures.' +
+          constrRouteNote(constrHitsNoClosures));
+        this._phRouteShown('unverified', null, constrHitsNoClosures, null);
+        return;
+      }
+
+      const hits = routeCrossesClosures(route, closuresData);
+      const constrHits = constrRouteHits(route, this.constrData);   // alert only; null = construction not checked
+
+      map.getSource('route-hits').setData({
+        type: 'FeatureCollection',
+        features: hits.map(h => ({
+          ...h.feature,
+          properties: { ...h.feature.properties, lapsed: h.info.pastEndDate, possible: h.info.kind === 'reduced' },
+        })),
+      });
+
+      // one closure can span several features, so group by name
+      const closedByName = new Map(), possibleNames = new Set();
+      for (const h of hits) {
+        if (h.info.kind === 'closed') {
+          closedByName.set(h.info.name, (closedByName.get(h.info.name) || false) || h.info.pastEndDate);
+        } else {
+          possibleNames.add(h.info.name);
+        }
+      }
+      for (const n of closedByName.keys()) possibleNames.delete(n);   // already warned as a closure
+      const parts = [...closedByName].map(([name, lapsed]) =>
+        lapsed ? `${name} ⚑ past listed end date, may be cleared` : name);
+      const maybe = [...possibleNames];
+
+      const stale = (Date.now() - new Date(this.generatedAt)) > 6 * 3600e3;
+      const km = (route.properties.summary.distance / 1000).toFixed(1);
+      const maybeText = `${maybe.length} lane restriction${maybe.length > 1 ? 's' : ''} ` +
+        `(${maybe.join('; ')}) — the street may still be passable`;
+
+      let text;
+      if (parts.length) {
+        text = `⚠ ${km} km route crosses ${parts.length} closure${parts.length > 1 ? 's' : ''}: ${parts.join('; ')}` +
+          (maybe.length ? `. It also passes ${maybeText}` : '');
+      } else if (maybe.length) {
+        text = `Heads up: your ${km} km route may be affected by ${maybeText}.`;
+      } else if (constrHits && constrHits.length) {
+        text = `Your ${km} km route:`;   // construction note appended below
+      } else {
+        text = `No known closures on this ${km} km route` + (stale ? ' (closure data may be stale)' : '');
+      }
+      const prefix = safeRouteMessage(result);
+      if (prefix) text = prefix + ' ' + text;
+      text += constrRouteNote(constrHits);
+      const bowNote = bowNoteText(result, hits, closuresData);   // '' unless it applies
+      text += bowNote;
+      banner(text);
+
+      this._phRouteShown(result.status, closedByName.size, constrHits,
+        bowNote ? () => phBowTrigger(result, hits, closuresData) : null);
+      this.cb().onRouteShown?.(pts[0], pts[1]);   // email ask only once the result is on screen
+    } catch (err) {
+      console.error('Routing error:', err);
+      banner(`Couldn't get a route (${err.message}). Try again.`);
+      try { phTrack('route_failed', {}); } catch (e) {}   // no error text is sent
+    }
+  }
+
+  // route_planned (+ construction_alert_shown, bow_river_notice_shown) once the
+  // banner is on screen. Counts and enums only. Never throws, so it can't stop
+  // the sign-up offer that follows it.
+  _phRouteShown(status, closuresHit, constrHits, bowTrigger) {
+    try {
+      if (!phIsOn()) return;   // analytics off: skip the extra Bow River geometry work
+      const p = { status };
+      if (Number.isInteger(closuresHit)) p.closures_hit = closuresHit;
+      phTrack('route_planned', p);
+      if (CITY.construction && constrHits && constrHits.length)
+        phTrack('construction_alert_shown', { sites_count: Math.min(5, constrHits.length) });
+      const trigger = bowTrigger && bowTrigger();
+      if (trigger) phTrack('bow_river_notice_shown', { trigger });
+    } catch (e) {}
+  }
+
+  // ----- Construction detours (display only) -----
+
+  async _loadConstruction() {
+    const status = (msg, bad) => this.cb().onConstrStatus?.(msg, bad);
+    let data;
+    try {
+      data = await fetchConstruction();
+    } catch (err) {
+      console.error('[construction] load failed:', err);
+      status('Construction data unavailable', true);
+      return;
+    }
+
+    const map = this.map;
+    try {
+      this.constrData = data;
+      map.addSource(CONSTR_SOURCE, { type: 'geojson', data });
+      map.addLayer({ id: CONSTR_LAYER, type: 'circle', source: CONSTR_SOURCE,
+        paint: {
+          'circle-color': '#0d9488',
+          'circle-radius': ['interpolate', ['linear'], ['zoom'], 10, 3, 13, 5, 16, 8, 18, 11],
+          'circle-stroke-color': '#fff',
+          'circle-stroke-width': 2,
+        } });
+      this._applyLayers();   // honor the checkbox if it was toggled while loading
+
+      map.on('click', CONSTR_LAYER, (e) => {
+        try {
+          if (this.planMode || !e.features || !e.features.length) return;
+          this._showPopup(e.features[0].geometry.coordinates,
+            <ConstructionPopup props={e.features[0].properties} fetchedAt={data.fetched_at} />);
+        } catch (err) { console.error('[construction] popup failed', err); }
+      });
+
+      // Pointer cursor on desktop. When closures load, their mousemove handler sets
+      // the cursor (and checks construction); this covers the closures-failed case.
+      map.on('mousemove', (e) => {
+        if (this.closuresData) return;
+        map.getCanvas().style.cursor = this._constrUnder(e.point) ? 'pointer' : '';
+      });
+
+      const fetched = constrFmtFetched(data.fetched_at);
+      const n = data.features.length;
+      status(n
+        ? `${n} active · fetched ${fetched || 'time unknown'}`
+        : 'No active construction closures reported' + (fetched ? ` · fetched ${fetched}` : ''), false);
+    } catch (err) {
+      console.error('[construction] layer init failed:', err);
+      status('Construction data unavailable', true);
+    }
+  }
+}

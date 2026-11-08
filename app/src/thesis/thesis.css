@@ -1,0 +1,26 @@
+@import "tailwindcss";
+
+/* Palette as CSS variables so it can switch with the system theme;
+   components use them through Tailwind's (--var) shorthand, e.g. text-(--water). */
+:root {
+  --bg: #f1f4f4; --ink: #12303b; --muted: #4d6670; --line: #c6d3d6; --panel: #ffffff;
+  --water: #1c7c8c; --sed: #8a6f4e; --soft: #e3ecee;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #0e1b21; --ink: #e4eef0; --muted: #9ab2ba; --line: #2a4350; --panel: #142630;
+    --water: #5cc0cf; --sed: #d3b184; --soft: #1a303a;
+  }
+}
+
+@theme {
+  --font-serif: Georgia, "Times New Roman", serif;
+  --font-sans: system-ui, -apple-system, "Segoe UI", sans-serif;
+}
+
+@layer base {
+  html { -webkit-text-size-adjust: 100%; }
+  body { background: var(--bg); color: var(--ink); font: 17px/1.6 var(--font-serif); }
+  a:focus-visible { outline: 3px solid var(--sed); outline-offset: 2px; }
+  svg text { font-family: var(--font-sans); }
+}

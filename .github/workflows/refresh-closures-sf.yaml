@@ -34,9 +34,9 @@ jobs:
       - name: Refresh closures from SFMTA (DataSF)
         # Exit 0 = success (real closures written, or genuinely nothing
         #          active/upcoming).
-        # Exit 1 = fetch/parse failed; data/sf/closures.geojson was left
+        # Exit 1 = fetch/parse failed; app/public/data/sf/closures.geojson was left
         #          untouched and the run goes red so a human investigates.
-        run: python3 Scraping/refresh_closures_sf.py
+        run: python3 api/scraping/refresh_closures_sf.py
 
       - name: Commit and push if closures changed
         run: |
@@ -44,14 +44,14 @@ jobs:
 
           # `git status --porcelain` (not `git diff`) so the very first run,
           # when the file is new and untracked, still gets committed.
-          if [ -z "$(git status --porcelain data/sf/closures.geojson)" ]; then
-            echo "No change in data/sf/closures.geojson; nothing to commit."
+          if [ -z "$(git status --porcelain app/public/data/sf/closures.geojson)" ]; then
+            echo "No change in app/public/data/sf/closures.geojson; nothing to commit."
             exit 0
           fi
 
           git config user.name  "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add data/sf/closures.geojson
+          git add app/public/data/sf/closures.geojson
           git commit -m "Refresh SF closures ($(date -u +%Y-%m-%dT%H:%MZ))"
 
           # The Calgary job may have pushed since we checked out.

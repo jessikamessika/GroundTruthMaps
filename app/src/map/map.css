@@ -1,0 +1,41 @@
+@import "tailwindcss";
+
+@theme {
+  --font-sans: system-ui, sans-serif;
+  --color-ink: #1a1a1a;
+  --color-link: #1a73e8;
+  --color-closed: #e11d48;
+  --color-detour: #7c3aed;
+  --color-reduced: #f59e0b;
+  --color-network: #7a8ca5;
+  --color-construction: #0d9488;
+  --color-danger-bg: #fef2f2;
+  --color-danger-ink: #7f1d1d;
+  --color-danger-line: #fecaca;
+  --color-field-err: #b3261e;
+  --shadow-pill: 0 1px 4px rgba(0, 0, 0, 0.25);
+  --shadow-btn: 0 1px 4px rgba(0, 0, 0, 0.3);
+  --shadow-panel: 0 1px 6px rgba(0, 0, 0, 0.3);
+  --shadow-sheet: 0 4px 20px rgba(0, 0, 0, 0.35);
+}
+
+@layer base {
+  html, body, #root { margin: 0; height: 100%; overflow: hidden; }
+  body { color: var(--color-ink); }
+}
+
+/* ---- MapLibre overrides ----
+   MapLibre's stylesheet is unlayered, so it beats anything in Tailwind's
+   layers. These overrides are unlayered too and load after it. */
+.maplibregl-popup-content {
+  font: 14px/1.5 system-ui, sans-serif;
+  max-width: 240px;
+  padding: 12px 28px 12px 12px;
+}
+.maplibregl-popup-close-button { font-size: 22px; width: 32px; height: 32px; }
+.maplibregl-ctrl-top-right { top: env(safe-area-inset-top); }
+
+/* Attribution control mounted inside the legend's credits popover */
+.attrib-pop .maplibregl-ctrl-attrib { margin: 0; padding: 0; background: none; }
+.attrib-pop .maplibregl-ctrl-attrib-button { display: none; }
+.attrib-pop a { color: var(--color-link); }
