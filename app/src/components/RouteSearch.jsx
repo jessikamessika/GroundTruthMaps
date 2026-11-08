@@ -1,11 +1,17 @@
 import { useEffect, useRef, useState } from 'react';
 import { CITY, IS_CALGARY } from '../core/config.js';
 import { createAddressIndex } from '../core/addressSearch.js';
+import { mergeRows, searchPlaces, shouldSearchPlaces } from '../core/placeSearch.js';
 
 const MY_LOCATION = 'My location';
 const DROPPED_PIN = 'Dropped pin';
-const NO_MATCH = 'No matching address. Try a house number and street, e.g. 1407 19 St NW.';
+const NO_MATCH = IS_CALGARY
+  ? 'No matching address. Try a house number and street, e.g. 1407 19 St NW.'
+  : 'No matching place.';
+const SEARCH_UNAVAILABLE = 'Search unavailable. Tap the map.';
+const NO_PLACES = { status: 'idle' };
 const SEARCH_DELAY_MS = 150;
+const PLACE_DELAY_MS = 400;     // ORS lookups count against a daily quota
 const BANNER_ROOM_PX = 130;     // a route result's banner and alerts pill, below the card
 const BOTTOM_PANELS_PX = 200;   // legend, feedback and the credits panel until the map is touched
 const FIELDS = [
@@ -47,6 +53,7 @@ export default function RouteSearch({ controller, endpoints, hidden }) {
   const [lastFocused, setLastFocused] = useState(null);
   const [query, setQuery] = useState('');
   const [result, setResult] = useState({ status: 'idle' });
+  const [places, setPlaces] = useState(NO_PLACES);   // carries the query it settled for
 
   const labelsRef = useRef(labels);
   const previous = useRef(endpoints);
@@ -69,13 +76,21 @@ export default function RouteSearch({ controller, endpoints, hidden }) {
   }, [endpoints]);
 
   useEffect(() => {
-    if (!editing || !addressIndex) return undefined;
-    let stale = false;
-    const timer = setTimeout(async () => {
-      const found = await addressIndex.search(query);
-      if (!stale) setResult(found);
+    if (!editing) return undefined;
+    const aborter = new AbortController();
+    const { signal } = aborter;
+    const searchCity = async () => (addressIndex ? addressIndex.search(query) : { status: 'idle' });
+    const cityTimer = setTimeout(async () => {
+      const found = await searchCity();
+      if (!signal.aborted) setResult(found);
     }, SEARCH_DELAY_MS);
-    return () => { stale = true; clearTimeout(timer); };
+    const placeTimer = setTimeout(async () => {
+      const wanted = shouldSearchPlaces(query, await searchCity());
+      if (signal.aborted) return;
+      const found = wanted ? await searchPlaces(query, signal) : NO_PLACES;
+      if (!signal.aborted) setPlaces({ ...found, query });
+    }, PLACE_DELAY_MS);
+    return () => { aborter.abort(); clearTimeout(cityTimer); clearTimeout(placeTimer); };   // keystroke, blur or pick
   }, [editing, query]);
 
   const closeKeyboard = which => inputs.current[which]?.blur();
@@ -95,11 +110,16 @@ export default function RouteSearch({ controller, endpoints, hidden }) {
     );
   };
 
+  const resetSearch = () => {
+    setQuery('');
+    setResult({ status: 'idle' });
+    setPlaces(NO_PLACES);
+  };
+
   const focusField = (which) => {
     setEditing(which);
     setLastFocused(which);
-    setQuery('');
-    setResult({ status: 'idle' });
+    resetSearch();
     addressIndex?.ready();
   };
 
@@ -117,11 +137,14 @@ export default function RouteSearch({ controller, endpoints, hidden }) {
   };
 
   const clearField = (which) => {
-    if (editing === which && query) setQuery('');
+    if (editing === which && query) resetSearch();
     else controller.current?.clearEndpoint(which);
   };
 
-  const rows = result.status === 'ok' ? result.rows : [];
+  const rows = mergeRows(result.status === 'ok' ? result.rows : [], places.status === 'ok' ? places.rows : []);
+  const settled = places.query === query;   // every lookup for what's typed has finished
+  const unavailable = places.status === 'unavailable';
+  const noMatch = settled && !rows.length && !unavailable && (result.status === 'ok' || places.status === 'ok');
   const keepFocus = e => e.preventDefault();
 
   return (
@@ -142,7 +165,7 @@ export default function RouteSearch({ controller, endpoints, hidden }) {
                   onBlur={() => setEditing(null)}
                   onChange={e => setQuery(e.target.value)}
                   onKeyDown={(e) => {
-                    if (e.key === 'Enter' && rows.length) pickAddress(which, rows[0]);
+                    if (e.key === 'Enter' && settled && rows.length) pickAddress(which, rows[0]);
                     if (e.key === 'Escape') closeKeyboard(which);
                   }}
                   className="h-11 min-w-0 flex-1 truncate bg-transparent px-2 text-base outline-none placeholder:text-neutral-600"
@@ -177,8 +200,10 @@ export default function RouteSearch({ controller, endpoints, hidden }) {
                 {row.label}
               </button>
             ))}
-            {result.status === 'ok' && !rows.length && (
-              <p role="status" className="border-t border-neutral-100 px-3 py-2.5 leading-[1.3] text-neutral-600">{NO_MATCH}</p>
+            {(noMatch || unavailable) && (
+              <p role="status" className="border-t border-neutral-100 px-3 py-2.5 leading-[1.3] text-neutral-600">
+                {unavailable ? SEARCH_UNAVAILABLE : NO_MATCH}
+              </p>
             )}
           </div>
         )}
