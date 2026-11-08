@@ -51,6 +51,10 @@ const HIT = 10;   // fat-finger tolerance (px) around a tap on thin closure line
 
 const emptyFC = () => ({ type: 'FeatureCollection', features: [] });
 
+function checkWhich(which) {
+  if (which !== 'start' && which !== 'end') throw new TypeError("which must be 'start' or 'end'");
+}
+
 // Distance in screen pixels from point p to segment a-b
 function segDist(p, a, b) {
   const dx = b.x - a.x, dy = b.y - a.y;
@@ -93,8 +97,10 @@ export class MapController {
     this.cb = getCallbacks;
     this.layers = layers;
     this.planMode = false;
-    this.pts = [];
-    this.markers = [];
+    this.ends = { start: null, end: null };       // [lng, lat] or null
+    this.endMarkers = { start: null, end: null }; // maplibregl.Marker or null
+    this.routeSeq = 0;   // bumped on every endpoint change/reset; stale route replies are dropped
+    this.routeDrawn = false;   // a route line for the current endpoints is on the map
     this.closuresData = null;
     this.generatedAt = null;
     this.constrData = null;
@@ -154,6 +160,45 @@ export class MapController {
   setPlanMode(on) {
     this.planMode = on;
     if (this.routingReady) this._resetRoute();
+  }
+
+  // ----- Route endpoints (programmatic; taps go through these too) -----
+  // which: 'start' | 'end'; lngLat: [lng, lat]. Work in or out of plan mode,
+  // once routing is ready (returns false before that).
+
+  setEndpoint(which, lngLat) {
+    checkWhich(which);
+    if (!Array.isArray(lngLat) || lngLat.length !== 2 || !lngLat.every(Number.isFinite))
+      throw new TypeError('lngLat must be [lng, lat]');
+    if (!this.routingReady) return false;
+    this._endpointsChanging();
+    this._placeEndpoint(which, lngLat);
+    this._endpointsChanged();
+    return true;
+  }
+
+  clearEndpoint(which) {
+    checkWhich(which);
+    if (!this.routingReady) return false;
+    this._endpointsChanging();
+    this._placeEndpoint(which, null);
+    this._endpointsChanged();
+    return true;
+  }
+
+  swapEndpoints() {
+    if (!this.routingReady) return false;
+    const { start, end } = this.ends;
+    this._endpointsChanging();
+    this._placeEndpoint('start', end);
+    this._placeEndpoint('end', start);
+    this._endpointsChanged();
+    return true;
+  }
+
+  getEndpoints() {
+    const copy = p => (p ? [p[0], p[1]] : null);
+    return { start: copy(this.ends.start), end: copy(this.ends.end) };
   }
 
   fitBounds(bounds, options) {
@@ -450,25 +495,68 @@ export class MapController {
   }
 
   _resetRoute() {
-    this.pts = [];
-    this.markers.forEach(m => m.remove());
-    this.markers = [];
-    this.map.getSource('route').setData(emptyFC());
-    this.map.getSource('route-hits').setData(emptyFC());
+    this.routeSeq++;
+    this.routeDrawn = false;
+    this._placeEndpoint('start', null);
+    this._placeEndpoint('end', null);
+    this._clearDrawnRoute();
     this.cb().onBanner?.(this.planMode ? 'Tap your start point' : '');
     this.cb().onRouteCleared?.();
+    this._emitEndpoints();
   }
 
-  async _onRouteClick(e) {
+  // Set (or with null, remove) one endpoint and its marker. Touches nothing else.
+  _placeEndpoint(which, lngLat) {
+    const old = this.endMarkers[which];
+    if (old) old.remove();
+    this.endMarkers[which] = null;
+    this.ends[which] = lngLat ? [lngLat[0], lngLat[1]] : null;
+    if (lngLat) {
+      this.endMarkers[which] = new maplibregl.Marker({ color: which === 'start' ? '#188038' : '#d93025' })
+        .setLngLat(this.ends[which]).addTo(this.map);
+    }
+  }
+
+  _clearDrawnRoute() {
+    this.map.getSource('route').setData(emptyFC());
+    this.map.getSource('route-hits').setData(emptyFC());
+  }
+
+  // Before an endpoint change: invalidate any in-flight request; if a route was
+  // drawn it no longer matches, so take it (and the sign-up offer) down.
+  _endpointsChanging() {
+    this.routeSeq++;
+    if (this.routeDrawn) {
+      this.routeDrawn = false;
+      this._clearDrawnRoute();
+      this.cb().onRouteCleared?.();
+    }
+  }
+
+  // After an endpoint change: report it, then plan or prompt for the missing point.
+  _endpointsChanged() {
+    this._emitEndpoints();
+    const { start, end } = this.ends;
+    if (start && end) this._planCurrentRoute();
+    else this.cb().onBanner?.(!this.planMode ? '' : start ? 'Tap your destination' : 'Tap your start point');
+  }
+
+  _emitEndpoints() {
+    this.cb().onEndpointsChanged?.(this.getEndpoints());
+  }
+
+  _onRouteClick(e) {
     if (!this.planMode) return;
+    const p = [e.lngLat.lng, e.lngLat.lat];
+    if (this.ends.start && this.ends.end) this._resetRoute();   // third tap starts over, as before
+    this.setEndpoint(this.ends.start ? 'end' : 'start', p);
+  }
+
+  async _planCurrentRoute() {
     const map = this.map;
     const banner = text => this.cb().onBanner?.(text);
-    if (this.pts.length === 2) this._resetRoute();
-    const pts = this.pts;
-    pts.push([e.lngLat.lng, e.lngLat.lat]);
-    this.markers.push(new maplibregl.Marker({ color: pts.length === 1 ? '#188038' : '#d93025' })
-      .setLngLat(e.lngLat).addTo(map));
-    if (pts.length === 1) { banner('Tap your destination'); return; }
+    const pts = [this.ends.start, this.ends.end];
+    const seq = this.routeSeq;
 
     banner('Routing…');
     const closuresData = this.closuresData;
@@ -480,8 +568,9 @@ export class MapController {
       } else {
         route = await fetchPlainRoute(pts[0], pts[1]);
       }
-      if (this.pts !== pts) return;   // route was reset while waiting
+      if (seq !== this.routeSeq) return;   // endpoints changed or route reset while waiting
       map.getSource('route').setData(route);
+      this.routeDrawn = true;
 
       if (!closuresData) {                      // fail closed
         const constrHitsNoClosures = constrRouteHits(route, this.constrData);
@@ -544,6 +633,7 @@ export class MapController {
       this.cb().onRouteShown?.(pts[0], pts[1]);   // email ask only once the result is on screen
     } catch (err) {
       console.error('Routing error:', err);
+      if (seq !== this.routeSeq) return;   // a newer request owns the banner now
       banner(`Couldn't get a route (${err.message}). Try again.`);
       try { phTrack('route_failed', {}); } catch (e) {}   // no error text is sent
     }

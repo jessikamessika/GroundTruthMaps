@@ -3,15 +3,18 @@ const ALLOWED_ORIGINS = new Set([
   'https://jessikamessika.github.io',
   'http://127.0.0.1:8000',
   'http://localhost:8000',
-  'http://192.168.67.174:8000',   // phone testing on the home LAN (dev only)
 ]);
+// Optional extra origin for phone testing on the LAN, e.g. http://192.168.x.y:8000.
+// Set with `npx wrangler secret put DEV_ORIGIN`; delete the secret when done.
+const originAllowed = (origin, env) =>
+  ALLOWED_ORIGINS.has(origin) || (!!env.DEV_ORIGIN && origin === env.DEV_ORIGIN);
 const CACHE_SECONDS = 900;
 
 export default {
-  async fetch(req) {
+  async fetch(req, env) {
     const origin = req.headers.get('Origin') || '';
     const cors = {
-      'Access-Control-Allow-Origin': ALLOWED_ORIGINS.has(origin) ? origin : 'null',
+      'Access-Control-Allow-Origin': originAllowed(origin, env) ? origin : 'null',
       'Vary': 'Origin',
     };
     const cache = caches.default;
