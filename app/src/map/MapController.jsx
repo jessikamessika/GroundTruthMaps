@@ -49,6 +49,14 @@ const LAYER_GROUPS = {
 
 const HIT = 10;   // fat-finger tolerance (px) around a tap on thin closure lines
 
+// Where routing works. Keep in step with BBOXES in api/workers/ors-proxy/src/index.js.
+const SERVICE_BOXES = [
+  { minLng: -114.5,  maxLng: -113.7,  minLat: 50.8,  maxLat: 51.3  },  // Calgary
+  { minLng: -122.55, maxLng: -122.35, minLat: 37.70, maxLat: 37.84 },  // San Francisco
+];
+const inServiceArea = ([lng, lat]) => SERVICE_BOXES.some(b =>
+  lng >= b.minLng && lng <= b.maxLng && lat >= b.minLat && lat <= b.maxLat);
+
 const emptyFC = () => ({ type: 'FeatureCollection', features: [] });
 
 function checkWhich(which) {
@@ -144,6 +152,7 @@ export class MapController {
   }
 
   destroy() {
+    this.routeSeq++;   // a location result arriving after this must not touch the removed map
     this.timers.forEach(clearInterval);
     try { this.attrib?.onRemove(); } catch (e) {}
     this.map.remove();
@@ -160,6 +169,7 @@ export class MapController {
   setPlanMode(on) {
     this.planMode = on;
     if (this.routingReady) this._resetRoute();
+    if (on) this._locateStart();
   }
 
   // ----- Route endpoints (programmatic; taps go through these too) -----
@@ -488,6 +498,7 @@ export class MapController {
     if (BOOTH) {   // land in route planning with the pitch still showing
       this.planMode = true;
       this.cb().onBanner?.(`${PITCH} Tap your start point`);
+      this._locateStart();
     }
     this.cb().onRoutingReady?.({ planMode: this.planMode });
 
@@ -503,6 +514,43 @@ export class MapController {
     this.cb().onBanner?.(this.planMode ? 'Tap your start point' : '');
     this.cb().onRouteCleared?.();
     this._emitEndpoints();
+  }
+
+  // Fill an empty route start from the device location. routeSeq moves on any
+  // endpoint change or reset (a tap, or plan mode going off), so a late result
+  // of either kind is dropped and can't overwrite the newer state or banner.
+  // Warnings carry the error code only, never coordinates.
+  _locateStart() {
+    if (this.ends.start) return;
+    const banner = text => this.cb().onBanner?.(text);
+    const failed = (code, text) => {
+      console.warn('[locate] failed:', code);
+      banner(text);
+    };
+    const UNAVAILABLE = "Couldn't find your location. Tap your start point.";
+
+    if (!window.isSecureContext) return failed('insecure-context', UNAVAILABLE);
+    if (!navigator.geolocation) return failed('no-geolocation', UNAVAILABLE);
+
+    const seq = this.routeSeq;
+    const stillWanted = () => this.planMode && !this.ends.start && seq === this.routeSeq;
+
+    banner(BOOTH ? 'Is your route closed? Finding your location…' : 'Finding your location…');
+    navigator.geolocation.getCurrentPosition(
+      (pos) => {
+        if (!stillWanted()) return;
+        const here = [pos.coords.longitude, pos.coords.latitude];
+        if (!inServiceArea(here)) return failed('outside-service-area', 'Tap your start point');
+        this.setEndpoint('start', here);
+      },
+      (err) => {
+        if (!stillWanted()) return;
+        failed(err.code, err.code !== 1 ? UNAVAILABLE
+          : BOOTH ? 'Find out if your route is closed! Tap your start point'
+          : 'Location is off. Tap your start point.');
+      },
+      { enableHighAccuracy: true, timeout: 10000, maximumAge: 30000 },
+    );
   }
 
   // Set (or with null, remove) one endpoint and its marker. Touches nothing else.

@@ -119,7 +119,7 @@ export default function PrivacyPage() {
     <main className="mx-auto max-w-[640px] px-4 pt-6 pb-12">
       <a className={`mb-4 inline-block text-sm ${linkCls}`} href="./">← Back to the map</a>
       <h1 className="mb-1 text-[22px] font-bold">Privacy notice: GroundTruth Maps</h1>
-      <p className="mb-5 text-[13px] text-neutral-600">Last updated: November 1, 2026</p>
+      <p className="mb-5 text-[13px] text-neutral-600">Last updated: November 8, 2026</p>
 
       <P><strong>Who:</strong> Zixuan Zhang, sole proprietor, operating as GroundTruth Studio,{' '}
         <A href={`mailto:${CONTACT_EMAIL}`}>{CONTACT_EMAIL}</A>.</P>
@@ -131,6 +131,12 @@ export default function PrivacyPage() {
       <P><strong>Who sees it:</strong> only me, the founder. Google (Sheets, Apps Script) is my service provider,
         so data may be stored outside Canada. PostHog (United States) is my service provider for anonymous usage statistics.</P>
       <P><strong>How long:</strong> 12 months after your last activity, then deleted.</P>
+      <P><strong>Device location:</strong> when you plan a route, the app asks your browser for your location to
+        fill in your start point. You can say no and tap the map instead. If you allow it, your exact location
+        becomes the route's start point and is sent through my routing server (Cloudflare) to OpenRouteService to
+        work out the route, the same as a point you tap. I don't save it unless you sign up for alerts on that route
+        or add it to your alerts. Then your exact location is saved as that route's start point and handled like
+        the other data above.</P>
       <P><strong>Reports:</strong> problem reports and feedback are sent through a Google Form. They
         may include a note and, only if you choose to give it, a contact email. I review them by
         hand; they never change the map automatically. Kept up to 12 months; to delete one, use
