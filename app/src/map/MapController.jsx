@@ -59,6 +59,14 @@ const inServiceArea = ([lng, lat]) => SERVICE_BOXES.some(b =>
 
 const emptyFC = () => ({ type: 'FeatureCollection', features: [] });
 
+const TAP_PROMPT = { start: 'Tap your start point', end: 'Tap your destination' };
+const FINDING_LOCATION = BOOTH ? 'Is your route closed? Finding your location…' : 'Finding your location…';
+const MAX_LOCATION_ACCURACY_M = 100;  // a reported accuracy worse than this is not used
+const SAME_PLACE_M = 20;              // endpoints this close aren't routed
+
+const metresBetween = (a, b) =>
+  Math.hypot((a[0] - b[0]) * Math.cos(a[1] * Math.PI / 180), a[1] - b[1]) * 111320;
+
 function checkWhich(which) {
   if (which !== 'start' && which !== 'end') throw new TypeError("which must be 'start' or 'end'");
 }
@@ -109,6 +117,8 @@ export class MapController {
     this.endMarkers = { start: null, end: null }; // maplibregl.Marker or null
     this.routeSeq = 0;   // bumped on every endpoint change/reset; stale route replies are dropped
     this.routeDrawn = false;   // a route line for the current endpoints is on the map
+    this.locating = { start: null, end: null };   // the location lookup in progress for each end, or null
+    this.routeBanner = '';   // the last message about the current pair of endpoints
     this.closuresData = null;
     this.generatedAt = null;
     this.constrData = null;
@@ -152,7 +162,8 @@ export class MapController {
   }
 
   destroy() {
-    this.routeSeq++;   // a location result arriving after this must not touch the removed map
+    this.routeSeq++;   // a route reply arriving after this must not touch the removed map
+    this.locating = { start: null, end: null };   // nor a location result
     this.timers.forEach(clearInterval);
     try { this.attrib?.onRemove(); } catch (e) {}
     this.map.remove();
@@ -190,6 +201,7 @@ export class MapController {
   clearEndpoint(which) {
     checkWhich(which);
     if (!this.routingReady) return false;
+    if (!this.ends[which]) return true;   // nothing to clear; a location lookup for it keeps running
     this._endpointsChanging();
     this._placeEndpoint(which, null);
     this._endpointsChanged();
@@ -209,6 +221,21 @@ export class MapController {
   getEndpoints() {
     const copy = p => (p ? [p[0], p[1]] : null);
     return { start: copy(this.ends.start), end: copy(this.ends.end) };
+  }
+
+  // Set one end from the device location, in route mode. Replaces a point
+  // already there. Always asks the browser afresh, so it can succeed after an
+  // earlier attempt failed. The banner reports progress and failures. Resolves
+  // to 'success' | 'denied' | 'timeout' | 'out_of_area' | 'low_accuracy' |
+  // 'error', or 'cancelled' if this end changed (or route mode ended) while waiting.
+  locateEndpoint(which) {
+    checkWhich(which);
+    if (!this.routingReady || !this.planMode) {
+      console.warn('[locate] failed:', 'not-in-route-mode');
+      this.cb().onBanner?.('Turn on route mode to use your location.');
+      return Promise.resolve('error');
+    }
+    return this._locate(which, { explainOutOfArea: true });
   }
 
   fitBounds(bounds, options) {
@@ -516,45 +543,72 @@ export class MapController {
     this._emitEndpoints();
   }
 
-  // Fill an empty route start from the device location. routeSeq moves on any
-  // endpoint change or reset (a tap, or plan mode going off), so a late result
-  // of either kind is dropped and can't overwrite the newer state or banner.
-  // Warnings carry the error code only, never coordinates.
+  // Fill an empty route start from the device location.
   _locateStart() {
-    if (this.ends.start) return;
-    const banner = text => this.cb().onBanner?.(text);
-    const failed = (code, text) => {
-      console.warn('[locate] failed:', code);
-      banner(text);
-    };
-    const UNAVAILABLE = "Couldn't find your location. Tap your start point.";
-
-    if (!window.isSecureContext) return failed('insecure-context', UNAVAILABLE);
-    if (!navigator.geolocation) return failed('no-geolocation', UNAVAILABLE);
-
-    const seq = this.routeSeq;
-    const stillWanted = () => this.planMode && !this.ends.start && seq === this.routeSeq;
-
-    banner(BOOTH ? 'Is your route closed? Finding your location…' : 'Finding your location…');
-    navigator.geolocation.getCurrentPosition(
-      (pos) => {
-        if (!stillWanted()) return;
-        const here = [pos.coords.longitude, pos.coords.latitude];
-        if (!inServiceArea(here)) return failed('outside-service-area', 'Tap your start point');
-        this.setEndpoint('start', here);
-      },
-      (err) => {
-        if (!stillWanted()) return;
-        failed(err.code, err.code !== 1 ? UNAVAILABLE
-          : BOOTH ? 'Find out if your route is closed! Tap your start point'
-          : 'Location is off. Tap your start point.');
-      },
-      { enableHighAccuracy: true, timeout: 10000, maximumAge: 30000 },
-    );
+    if (!this.ends.start) this._locate('start');
   }
 
-  // Set (or with null, remove) one endpoint and its marker. Touches nothing else.
+  // Run one location lookup for an end and resolve to its outcome (see
+  // locateEndpoint). Any change to this end, a reset, or a newer lookup for it
+  // replaces this.locating[which], so a late result is dropped and can't
+  // overwrite the newer state or banner. A change to the other end leaves the
+  // lookup running. Warnings carry the error code only, never coordinates.
+  _locate(which, { explainOutOfArea = false } = {}) {
+    const banner = text => this.cb().onBanner?.(text);
+    const tap = TAP_PROMPT[which];
+    const other = which === 'start' ? 'end' : 'start';
+    const UNAVAILABLE = "Couldn't find your location.";
+    const lookup = {};
+
+    return new Promise((resolve) => {
+      const finish = (outcome) => {
+        if (this.locating[which] === lookup) this.locating[which] = null;
+        resolve(outcome);
+      };
+      // If this end already has a point it stays, so keep what's still true
+      // on screen instead of asking for a tap.
+      const failed = (outcome, code, reason, emptyText = `${reason} ${tap}.`) => {
+        console.warn('[locate] failed:', code);
+        const after = this.ends[other] ? this.routeBanner : `${TAP_PROMPT[other]}.`;
+        banner(this.ends[which] ? `${reason} ${after}` : emptyText);
+        finish(outcome);
+      };
+      if (!window.isSecureContext) return failed('error', 'insecure-context', UNAVAILABLE);
+      if (!navigator.geolocation) return failed('error', 'no-geolocation', UNAVAILABLE);
+
+      const stillWanted = () => this.planMode && this.locating[which] === lookup;
+      this.locating[which] = lookup;
+
+      banner(FINDING_LOCATION);
+      navigator.geolocation.getCurrentPosition(
+        (pos) => {
+          if (!stillWanted()) return resolve('cancelled');
+          const here = [pos.coords.longitude, pos.coords.latitude];
+          if (!inServiceArea(here)) {
+            return failed('out_of_area', 'outside-service-area', "You're outside the map area.",
+              explainOutOfArea ? undefined : tap);
+          }
+          if (pos.coords.accuracy > MAX_LOCATION_ACCURACY_M) {
+            return failed('low_accuracy', 'low-accuracy', "Your location isn't precise enough.");
+          }
+          this.setEndpoint(which, here);
+          finish('success');
+        },
+        (err) => {
+          if (!stillWanted()) return resolve('cancelled');
+          const outcome = err.code === 1 ? 'denied' : err.code === 3 ? 'timeout' : 'error';
+          if (err.code !== 1) return failed(outcome, err.code, UNAVAILABLE);
+          failed(outcome, err.code, 'Location is off.', BOOTH ? `Find out if your route is closed! ${tap}` : undefined);
+        },
+        { enableHighAccuracy: true, timeout: 10000, maximumAge: 30000 },
+      );
+    });
+  }
+
+  // Set (or with null, remove) one endpoint and its marker, and cancel any
+  // location lookup for that end. Touches nothing else.
   _placeEndpoint(which, lngLat) {
+    this.locating[which] = null;
     const old = this.endMarkers[which];
     if (old) old.remove();
     this.endMarkers[which] = null;
@@ -574,6 +628,7 @@ export class MapController {
   // drawn it no longer matches, so take it (and the sign-up offer) down.
   _endpointsChanging() {
     this.routeSeq++;
+    this.routeBanner = '';
     if (this.routeDrawn) {
       this.routeDrawn = false;
       this._clearDrawnRoute();
@@ -585,8 +640,14 @@ export class MapController {
   _endpointsChanged() {
     this._emitEndpoints();
     const { start, end } = this.ends;
-    if (start && end) this._planCurrentRoute();
-    else this.cb().onBanner?.(!this.planMode ? '' : start ? 'Tap your destination' : 'Tap your start point');
+    if (start && end) {
+      if (metresBetween(start, end) > SAME_PLACE_M) return this._planCurrentRoute();
+      this.routeBanner = 'Your start and destination are too close together. Please check your points.';
+      this.cb().onBanner?.(this.routeBanner);
+      return;
+    }
+    const missing = start ? 'end' : 'start';
+    this.cb().onBanner?.(!this.planMode ? '' : this.locating[missing] ? FINDING_LOCATION : TAP_PROMPT[missing]);
   }
 
   _emitEndpoints() {
@@ -602,7 +663,7 @@ export class MapController {
 
   async _planCurrentRoute() {
     const map = this.map;
-    const banner = text => this.cb().onBanner?.(text);
+    const banner = text => { this.routeBanner = text; this.cb().onBanner?.(text); };
     const pts = [this.ends.start, this.ends.end];
     const seq = this.routeSeq;
 
