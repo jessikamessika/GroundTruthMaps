@@ -13,6 +13,6 @@
 		}
 	],
 	"settings": {"python.analysis.extraPaths": [
-  "${workspaceFolder:GroundTruthMaps}/Scraping"
+  "${workspaceFolder:GroundTruthMaps}/api/scraping"
 ]}
 }

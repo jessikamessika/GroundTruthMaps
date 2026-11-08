@@ -217,10 +217,12 @@ __marimo__/
 # Streamlit
 .streamlit/secrets.toml
 
-# Full merged data — large, regenerable by merge.py, not meant for version control
-data/combined.geojson
+# Full merged data — large, regenerable by api/scraping/merge.py, not meant for version control
+api/scraping/output/
 
-worker/.wrangler/
+# Web app (app/): dependencies and build output
+node_modules/
+app/dist/
 
 # wrangler files
 .wrangler

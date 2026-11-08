@@ -1,0 +1,12 @@
+@import "tailwindcss";
+
+@theme {
+  --font-sans: system-ui, sans-serif;
+  --color-ink: #1a1a1a;
+  --color-link: #1a73e8;
+  --color-field-err: #b3261e;
+}
+
+@layer base {
+  body { background: #fff; color: var(--color-ink); font-size: 15px; line-height: 1.5; }
+}
