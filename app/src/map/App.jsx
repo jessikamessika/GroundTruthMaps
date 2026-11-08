@@ -32,6 +32,8 @@ export default function App() {
   const [banner, setBanner] = useState(BOOTH ? PITCH : '');
   const [routingReady, setRoutingReady] = useState(false);
   const [planMode, setPlanMode] = useState(false);
+  // Not shown yet; kept for upcoming endpoint UI.
+  const [endpoints, setEndpoints] = useState({ start: null, end: null });
 
   const signup = useSignup(controller);
 
@@ -52,6 +54,7 @@ export default function App() {
     onBanner: setBanner,
     onRouteShown: signup.offer,
     onRouteCleared: signup.clearRoute,
+    onEndpointsChanged: setEndpoints,
   };
 
   useEffect(() => {
@@ -62,7 +65,12 @@ export default function App() {
       layers: INITIAL_LAYERS,
     });
     controller.current = c;
-    return () => { controller.current = null; c.destroy(); };
+    if (import.meta.env.DEV) window.__gtm = c;   // dev server only: console testing
+    return () => {
+      if (import.meta.env.DEV && window.__gtm === c) delete window.__gtm;
+      controller.current = null;
+      c.destroy();
+    };
   }, []);
 
   useEffect(() => { controller.current?.setLayers(layers); }, [layers]);

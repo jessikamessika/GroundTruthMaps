@@ -2,8 +2,11 @@ const ALLOWED_ORIGINS = new Set([
   'https://jessikamessika.github.io',
   'http://127.0.0.1:8000',
   'http://localhost:8000',
-  'http://192.168.67.174:8000',   // phone testing on the home LAN (dev only)
 ]);
+// Optional extra origin for phone testing on the LAN, e.g. http://192.168.x.y:8000.
+// Set with `npx wrangler secret put DEV_ORIGIN`; delete the secret when done.
+const originAllowed = (origin, env) =>
+  ALLOWED_ORIGINS.has(origin) || (!!env.DEV_ORIGIN && origin === env.DEV_ORIGIN);
 const ORS = 'https://api.openrouteservice.org/v2/directions/cycling-regular/geojson';
 const BBOXES = [
   { minLng: -114.5,  maxLng: -113.7,  minLat: 50.8,  maxLat: 51.3  },  // Calgary
@@ -47,7 +50,7 @@ function validAvoid(a) {
 export default {
   async fetch(request, env) {
     const origin = request.headers.get('Origin') || '';
-    if (!ALLOWED_ORIGINS.has(origin)) return err(403, 'Origin not allowed');
+    if (!originAllowed(origin, env)) return err(403, 'Origin not allowed');
 
     const cors = {
       'Access-Control-Allow-Origin': origin,
