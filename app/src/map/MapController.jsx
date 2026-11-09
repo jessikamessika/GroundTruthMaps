@@ -762,11 +762,13 @@ export class MapController {
         text = `Heads up: your ${km} km route may be affected by ${maybeText}.`;
       } else if (constrHits && constrHits.length) {
         text = `Your ${km} km route:`;   // construction note appended below
+      } else if (result.status === 'avoided') {
+        text = stale ? '(closure data may be stale)' : '';   // the reroute sentence stands alone
       } else {
         text = `No known closures on this ${km} km route` + (stale ? ' (closure data may be stale)' : '');
       }
       const prefix = safeRouteMessage(result);
-      if (prefix) text = prefix + ' ' + text;
+      if (prefix) text = text ? prefix + ' ' + text : prefix;
       const constrNote = constrRouteNote(constrHits);
       if (constrNote) text = endSentence(text) + constrNote;
       const bowNote = bowNoteText(result, hits, closuresData);   // '' unless it applies
