@@ -224,6 +224,10 @@ api/scraping/output/
 node_modules/
 app/dist/
 
+# Calgary address index: built in CI by api/scraping/build_address_index.py
+app/public/data/addr/
+app/public/data/.addr-*/
+
 # wrangler files
 .wrangler
 .dev.vars*

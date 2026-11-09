@@ -13,8 +13,12 @@ const CACHE_SECONDS = 900;
 export default {
   async fetch(req, env) {
     const origin = req.headers.get('Origin') || '';
+    if (!originAllowed(origin, env)) {
+      return new Response(JSON.stringify({ error: { message: 'Origin not allowed' } }),
+        { status: 403, headers: { 'Content-Type': 'application/json' } });
+    }
     const cors = {
-      'Access-Control-Allow-Origin': originAllowed(origin, env) ? origin : 'null',
+      'Access-Control-Allow-Origin': origin,
       'Vary': 'Origin',
     };
     const cache = caches.default;

@@ -14,6 +14,7 @@ on:
       - "app/**"
       - "package.json"
       - "package-lock.json"
+      - "api/scraping/build_address_index.py"
       - ".github/workflows/deploy-pages.yaml"
   workflow_run:
     workflows: ["Refresh pathway closures", "Refresh SF closures"]
@@ -49,6 +50,66 @@ jobs:
 
       - name: Install dependencies
         run: npm ci
+
+      # Calgary address index (gitignored, built here). Nothing in this block
+      # may fail the deploy: every step is continue-on-error.
+      # The key rolls over each Thursday 18:00 UTC, after the City's weekly
+      # update. The script's hash keeps older caches of a different format
+      # from being restored.
+      - name: Work out address index cache key
+        id: addr-key
+        continue-on-error: true
+        run: |
+          week_start=$(( ($(date -u +%s) - 64800) / 604800 * 604800 + 64800 ))
+          echo "thursday=$(date -u -d "@$week_start" +%F)" >> "$GITHUB_OUTPUT"
+
+      - name: Restore address index
+        id: addr-cache
+        continue-on-error: true
+        timeout-minutes: 5
+        uses: actions/cache/restore@v4
+        with:
+          path: app/public/data/addr
+          key: addr-index-${{ hashFiles('api/scraping/build_address_index.py') }}-${{ steps.addr-key.outputs.thursday }}
+          restore-keys: |
+            addr-index-${{ hashFiles('api/scraping/build_address_index.py') }}-
+
+      - name: Set up Python for address index
+        if: steps.addr-cache.outputs.cache-hit != 'true'
+        continue-on-error: true
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Build address index
+        id: addr-build
+        if: steps.addr-cache.outputs.cache-hit != 'true'
+        continue-on-error: true
+        timeout-minutes: 10
+        # Fail-closed: on failure, any older cached copy restored above stays in place.
+        run: python3 api/scraping/build_address_index.py
+
+      - name: Save address index
+        # Only a fresh build, so an older copy is never stored under this week's key.
+        if: steps.addr-build.outcome == 'success'
+        continue-on-error: true
+        timeout-minutes: 5
+        uses: actions/cache/save@v4
+        with:
+          path: app/public/data/addr
+          key: ${{ steps.addr-cache.outputs.cache-primary-key }}
+
+      - name: Check address index
+        continue-on-error: true
+        run: |
+          # A build killed by the timeout could leave its temp folder, which Vite would publish.
+          rm -rf app/public/data/.addr-*
+          if [ ! -f app/public/data/addr/manifest.json ]; then
+            rm -rf app/public/data/addr
+            echo "::warning::No address index available; deploying without app/public/data/addr."
+          elif [ "${{ steps.addr-build.outcome }}" = "failure" ]; then
+            echo "::warning::Address index build failed; deploying older copy (${{ steps.addr-cache.outputs.cache-matched-key }})."
+          fi
 
       - name: Build
         run: npm run build

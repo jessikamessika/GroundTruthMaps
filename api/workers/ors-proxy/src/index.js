@@ -8,11 +8,18 @@ const ALLOWED_ORIGINS = new Set([
 const originAllowed = (origin, env) =>
   ALLOWED_ORIGINS.has(origin) || (!!env.DEV_ORIGIN && origin === env.DEV_ORIGIN);
 const ORS = 'https://api.openrouteservice.org/v2/directions/cycling-regular/geojson';
-const BBOXES = [
-  { minLng: -114.5,  maxLng: -113.7,  minLat: 50.8,  maxLat: 51.3  },  // Calgary
-  { minLng: -122.55, maxLng: -122.35, minLat: 37.70, maxLat: 37.84 },  // San Francisco (checked GMaps.)
-];
-const inAnyBox = p => BBOXES.some(b => p[0] >= b.minLng && p[0] <= b.maxLng && p[1] >= b.minLat && p[1] <= b.maxLat);
+const BBOXES = {
+  calgary: { minLng: -114.5,  maxLng: -113.7,  minLat: 50.8,  maxLat: 51.3  },
+  sf:      { minLng: -122.55, maxLng: -122.35, minLat: 37.70, maxLat: 37.84 },  // (checked GMaps.)
+};
+const inBox = (p, b) => p[0] >= b.minLng && p[0] <= b.maxLng && p[1] >= b.minLat && p[1] <= b.maxLat;
+const inAnyBox = p => Object.values(BBOXES).some(b => inBox(p, b));
+
+// ORS free plan, autocomplete: 1000 requests/day, 100/minute.
+const GEOCODE_URL = 'https://api.openrouteservice.org/geocode/autocomplete';
+const GEOCODE_LAYERS = 'address,venue,street,neighbourhood';   // places a route can start or end at
+const GEOCODE_TIMEOUT_MS = 5000;
+const GEOCODE_TTL_S = 3600;
 
 const err = (status, message, headers = {}) =>
   new Response(JSON.stringify({ error: { message } }),
@@ -47,8 +54,108 @@ function validAvoid(a) {
   return true;
 }
 
+const jsonWith = (status, body, headers) =>
+  new Response(typeof body === 'string' ? body : JSON.stringify(body),
+    { status, headers: { ...headers, 'Content-Type': 'application/json' } });
+
+// ORS GeoJSON -> at most 5 { label, lng, lat } inside the city's box. Null if the reply isn't usable.
+function toResults(data, box) {
+  if (!data || !Array.isArray(data.features)) return null;
+  const results = [];
+  for (const f of data.features) {
+    const label = f?.properties?.label;
+    const c = f?.geometry?.coordinates;
+    if (typeof label !== 'string' || !label || !Array.isArray(c) || !c.slice(0, 2).every(Number.isFinite)) continue;
+    if (inBox(c, box)) results.push({ label, lng: c[0], lat: c[1] });
+    if (results.length === 5) break;
+  }
+  return results;
+}
+
+// Logs carry status codes and error names only: never the query, coordinates or key.
+async function handleGeocode(request, url, env, ctx) {
+  const origin = request.headers.get('Origin') || '';
+  if (!originAllowed(origin, env)) return err(403, 'Origin not allowed');
+
+  const cors = {
+    'Access-Control-Allow-Origin': origin,
+    'Access-Control-Allow-Methods': 'GET, OPTIONS',
+    'Access-Control-Allow-Headers': 'Content-Type',
+    'Vary': 'Origin',
+  };
+  if (request.method === 'OPTIONS') return new Response(null, { status: 204, headers: cors });
+  if (request.method !== 'GET') return jsonWith(405, { error: 'method_not_allowed' }, cors);
+
+  const text = (url.searchParams.get('text') || '').trim();
+  if (text.length < 3 || text.length > 100) return jsonWith(400, { error: 'invalid_text' }, cors);
+  const city = url.searchParams.get('city');
+  if (!city || !Object.hasOwn(BBOXES, city)) return jsonWith(400, { error: 'invalid_city' }, cors);
+  const box = BBOXES[city];
+
+  // CORS is added per response, so one cached entry serves every allowed origin.
+  // A cache failure must never fail the lookup.
+  const cacheKey = new Request(
+    `${url.origin}/__geocode_cache?city=${city}&text=${encodeURIComponent(text.toLowerCase())}`);
+  try {
+    const hit = await caches.default.match(cacheKey);
+    if (hit) return jsonWith(200, await hit.text(), cors);
+  } catch (e) { console.warn('Geocode cache read failed:', e.name); }
+
+  // After the cache, so only requests that would reach ORS count. One shared bucket, as for routes.
+  // Fails open: a limiter error must not break the lookup. Only an explicit refusal blocks it.
+  let limit;
+  try {
+    limit = await env.GEOCODE_LIMITER.limit({ key: 'geocode' });
+  } catch (e) { console.warn('Geocode limiter failed:', e.name); }
+  if (limit?.success === false) return jsonWith(429, { error: 'rate_limited' }, cors);
+
+  const unavailable = () => jsonWith(502, { error: 'geocoder_unavailable' }, cors);
+  const params = new URLSearchParams({
+    text,
+    size: '5',
+    layers: GEOCODE_LAYERS,
+    'boundary.rect.min_lon': box.minLng,
+    'boundary.rect.min_lat': box.minLat,
+    'boundary.rect.max_lon': box.maxLng,
+    'boundary.rect.max_lat': box.maxLat,
+    'focus.point.lon': (box.minLng + box.maxLng) / 2,
+    'focus.point.lat': (box.minLat + box.maxLat) / 2,
+  });
+
+  let results;
+  try {
+    const upstream = await fetch(`${GEOCODE_URL}?${params}`, {
+      headers: { 'Authorization': env.ORS_KEY },
+      signal: AbortSignal.timeout(GEOCODE_TIMEOUT_MS),
+    });
+    if (!upstream.ok) {
+      console.error('ORS geocode responded', upstream.status);
+      return unavailable();
+    }
+    results = toResults(await upstream.json(), box);
+  } catch (e) {
+    console.error('ORS geocode failed:', e.name);
+    return unavailable();
+  }
+  if (!results) {
+    console.error('ORS geocode reply was not usable');
+    return unavailable();
+  }
+
+  const body = JSON.stringify({ results });
+  try {
+    ctx.waitUntil(caches.default.put(cacheKey, new Response(body, {
+      headers: { 'Content-Type': 'application/json', 'Cache-Control': `public, max-age=${GEOCODE_TTL_S}` },
+    })).catch(e => console.warn('Geocode cache write failed:', e.name)));
+  } catch (e) { console.warn('Geocode cache write failed:', e.name); }
+  return jsonWith(200, body, cors);
+}
+
 export default {
-  async fetch(request, env) {
+  async fetch(request, env, ctx) {
+    const url = new URL(request.url);
+    if (url.pathname === '/geocode') return handleGeocode(request, url, env, ctx);
+
     const origin = request.headers.get('Origin') || '';
     if (!originAllowed(origin, env)) return err(403, 'Origin not allowed');
 
