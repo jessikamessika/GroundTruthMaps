@@ -4,9 +4,10 @@
 import * as turf from '@turf/turf';
 import { CITY, IS_CALGARY, ORS_PROXY_URL } from './config.js';
 
-const MIN_CHARS = 3;
+export const MIN_CHARS = 3;
 const MAX_CHARS = 100;          // the Worker refuses anything longer
-const NEAR_DUPLICATE_M = 30;
+const SAME_AS_CITY_M = 30;
+const SAME_LABEL_M = 150;       // one intersection can come back as several nodes
 const MAX_ROWS = 6;
 const LABEL_TAILS = {
   calgary: /, Calgary, AB, Canada$/i,
@@ -16,7 +17,7 @@ const UNAVAILABLE = { status: 'unavailable' };
 
 const cache = new Map();        // "city|query" -> rows, for the session; only successes
 
-const closeTogether = (a, b) => turf.distance(a.point, b.point, { units: 'meters' }) <= NEAR_DUPLICATE_M;
+const metresApart = (a, b) => turf.distance(a, b, { units: 'meters' });
 
 // Whether a query is worth an ORS lookup, given what the City index returned for it.
 export function shouldSearchPlaces(text, cityResult) {
@@ -34,8 +35,8 @@ function toRows(results) {
   const rows = [];
   results.forEach(({ label, lng, lat }, i) => {
     if (CITY.key === 'sf' && label.includes('=>')) return;
-    const row = { id: `ors|${i}|${label}`, label: label.replace(LABEL_TAILS[CITY.key], ''), point: [lng, lat] };
-    if (!rows.some(kept => kept.label === row.label && closeTogether(kept, row))) rows.push(row);
+    const row = { id: `ors|${i}|${label}`, label: label.replace(LABEL_TAILS[CITY.key], ''), point: [lng, lat], source: 'ors' };
+    if (!rows.some(kept => kept.label === row.label && metresApart(kept.point, row.point) <= SAME_LABEL_M)) rows.push(row);
   });
   return rows;
 }
@@ -60,6 +61,24 @@ export async function searchPlaces(text, signal) {
 
 // City rows first, then ORS rows that aren't the same place as a City row.
 export function mergeRows(cityRows, placeRows) {
-  const distinct = placeRows.filter(place => !cityRows.some(row => closeTogether(row, place)));
+  const distinct = placeRows.filter(place => !cityRows.some(row => metresApart(row.point, place.point) <= SAME_AS_CITY_M));
   return [...cityRows, ...distinct].slice(0, MAX_ROWS);
+}
+
+// Under 1 km in 100 m steps, otherwise to 0.1 km.
+function distanceText(metres) {
+  const steps = Math.round(metres / 100);
+  return steps < 10 ? `${Math.max(steps, 1) * 100} m` : `${(steps / 10).toFixed(1)} km`;
+}
+
+// Gives rows that would otherwise read the same a hint: "2.3 km from start".
+// origin is { point, name }.
+export function addDistanceHints(rows, origin) {
+  if (!origin) return rows;
+  const family = row => row.baseLabel ?? row.label;
+  const counts = new Map();
+  rows.forEach(row => counts.set(family(row), (counts.get(family(row)) || 0) + 1));
+  return rows.map(row => (counts.get(family(row)) > 1
+    ? { ...row, hint: `${distanceText(metresApart(origin.point, row.point))} from ${origin.name}` }
+    : row));
 }

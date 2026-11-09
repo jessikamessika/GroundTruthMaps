@@ -7,7 +7,7 @@
 //   - the visitor hasn't turned usage statistics off on privacy.html (gtm_ph_optout)
 //   - localStorage can be read and written (otherwise the opt-out couldn't be honoured)
 //
-// Only the 11 events in PH_EVENTS (plus scrubbed $exception) are ever sent, with
+// Only the 14 events in PH_EVENTS (plus scrubbed $exception) are ever sent, with
 // enum / capped-int / boolean properties only. The same allowlist runs twice:
 // in phTrack() and in PostHog's before_send hook (phBeforeSend), which also sees
 // every SDK-generated event and drops anything not listed.
@@ -46,6 +46,7 @@ const PH_MAX_QUEUE = 50;           // events held while the SDK loads
 // {min, max} = integer, clamped into the range.
 const PH_SRC_VALUES = ['booth-qr', 'booth-nfc', 'booth-form', 'none'];
 const PH_CITY_VALUES = ['calgary', 'sf'];
+const PH_END_VALUES = ['start', 'end'];
 const PH_EVENTS = {
   app_open: { device: ['phone', 'desktop'], city: PH_CITY_VALUES, returning: 'bool',
               days_since_first: { min: 0, max: 3650 } },
@@ -60,6 +61,11 @@ const PH_EVENTS = {
   report_link_clicked: { report_type: ['still_closed', 'open_now', 'wrong_dates'] },
   construction_alert_shown: { sites_count: { min: 0, max: 5 } },
   bow_river_notice_shown: { trigger: ['plain_route', 'near_final', 'both'] },
+  geolocate_used: { end: PH_END_VALUES, trigger: ['auto', 'manual'],
+                    outcome: ['success', 'denied', 'timeout', 'out_of_area', 'low_accuracy', 'error'] },
+  address_searched: { picked: 'bool', source: ['city', 'ors', 'location', 'none'],
+                      result_bucket: ['0', '1', '2-5', '6'], unavailable: 'bool', city: PH_CITY_VALUES },
+  endpoint_edited: { end: PH_END_VALUES, action: ['set', 'clear', 'swap'], source: ['search', 'tap', 'location'] },
 };
 // Every custom event also carries src (PH_SRC_VALUES).
 

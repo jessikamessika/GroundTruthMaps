@@ -6,7 +6,8 @@ export const CITIES = {
     timezone: 'America/Edmonton',
     // Relative to /web/: resolves to /data/ in dev and /GroundTruthMaps/data/ on Pages.
     dataDir: '../data', network: true, construction: true,
-    attribution: 'City of Calgary Open Data (Open Government Licence - Calgary)',
+    // HTML: MapLibre's attribution control renders this as markup.
+    attribution: 'City of Calgary Open Data (<a href="https://data.calgary.ca/stories/s/Open-Calgary-Terms-of-Use/u45n-7awa" target="_blank" rel="noopener">Open Government Licence - Calgary</a>)',
   },
   sf: {
     key: 'sf', name: 'San Francisco', center: [-122.4194, 37.7749], zoom: 12,
@@ -43,3 +44,5 @@ export const NETWORK_URL = CITY.dataDir + '/network.geojson';
 
 // Credits shown behind the map's "i" button (OpenStreetMap ODbL + city source).
 export const OSM_ATTRIBUTION = '© OpenStreetMap contributors (ODbL)';
+// Wording required by https://account.heigit.org/info/tos ("Attribution and License").
+export const ORS_ATTRIBUTION = '© openrouteservice by HeiGIT | Data from OpenStreetMap';

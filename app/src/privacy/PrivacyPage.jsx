@@ -137,6 +137,19 @@ export default function PrivacyPage() {
         work out the route, the same as a point you tap. I don't save it unless you sign up for alerts on that route
         or add it to your alerts. Then your exact location is saved as that route's start point and handled like
         the other data above.</P>
+      <P><strong>Address search:</strong> when you type a Calgary street address, it's matched on your device
+        against a public City of Calgary address list. To do that, the app downloads a public file from this site,
+        chosen by the street number or the first three letters of the street name. The rest of what you type
+        isn't sent. If there's no match on your device, or the list can't load, what you typed is handled as a
+        place search (below).</P>
+      <P><strong>Place search:</strong> text you type to find places, and all San Francisco searches, is sent to
+        my server (Cloudflare) and forwarded to OpenRouteService, run by HeiGIT gGmbH in Heidelberg, Germany, to
+        find matches. I don't keep a record of your searches. To save lookups, my server's Cloudflare cache holds
+        each search and its results for up to an hour. My server's request logs are off.</P>
+      <P><strong>“My location” in a route field:</strong> your position is used to set that route point, the same
+        as a point you tap, and goes through my routing server to OpenRouteService to work out the route. While
+        the app is open, it also remembers your position on your device to show how far away search results are.
+        It isn't stored unless you save that route for alerts, as described under Device location.</P>
       <P><strong>Reports:</strong> problem reports and feedback are sent through a Google Form. They
         may include a note and, only if you choose to give it, a contact email. I review them by
         hand; they never change the map automatically. Kept up to 12 months; to delete one, use
@@ -151,6 +164,9 @@ export default function PrivacyPage() {
         are not stored with usage events. Kept up to 12 months. You can turn this off with the switch at the bottom
         of this page, which also deletes the random ID. The app also doesn't collect usage statistics if your browser
         sends Do Not Track or Global Privacy Control. The setting is saved in your browser, so clearing site data resets it.</P>
+      <P>Usage statistics also include three events about route points: geolocate_used, address_searched and
+        endpoint_edited. They record things like whether a location lookup worked, whether a suggestion was picked
+        and roughly how many results appeared. No addresses, search text or locations are included.</P>
       <P><strong>Your rights:</strong> unsubscribe via any email's link; see, correct or delete your
         data with the form below or by email (within 10 business days); complain to the{' '}
         <A href="https://oipc.ab.ca/" ext>Information and Privacy Commissioner of Alberta</A>. I ask that you

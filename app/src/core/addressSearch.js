@@ -145,6 +145,7 @@ export function findRows(query, shards, terms) {
     return points.map((point, i) => ({
       id: `${street}|${number}${alpha}|${i}`,
       label: points.length > 1 ? `${label} · location ${i + 1} of ${points.length}` : label,
+      baseLabel: label,
       point,
     }));
   }).slice(0, MAX_ROWS);

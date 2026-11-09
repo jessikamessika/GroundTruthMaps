@@ -11,7 +11,7 @@ import { createRoot } from 'react-dom/client';
 import { flushSync } from 'react-dom';
 
 import {
-  BOOTH, CITY, CLOSURES_URL, NETWORK_URL, OSM_ATTRIBUTION, PITCH, VENUE,
+  BOOTH, CITY, CLOSURES_URL, NETWORK_URL, ORS_ATTRIBUTION, OSM_ATTRIBUTION, PITCH, VENUE,
 } from '../core/config.js';
 import {
   closureInfo, fetchPlainRoute, planSafeRoutes, refreshTemporal, routeCrossesClosures,
@@ -59,13 +59,15 @@ const inServiceArea = ([lng, lat]) => SERVICE_BOXES.some(b =>
 
 const emptyFC = () => ({ type: 'FeatureCollection', features: [] });
 
-const TAP_PROMPT = { start: 'Tap your start point', end: 'Tap your destination' };
+const TAP_PROMPT = { start: 'Search or tap your start point', end: 'Search or tap your destination' };
 const FINDING_LOCATION = BOOTH ? 'Is your route closed? Finding your location…' : 'Finding your location…';
 const MAX_LOCATION_ACCURACY_M = 100;  // a reported accuracy worse than this is not used
 const SAME_PLACE_M = 20;              // endpoints this close aren't routed
 
 const metresBetween = (a, b) =>
   Math.hypot((a[0] - b[0]) * Math.cos(a[1] * Math.PI / 180), a[1] - b[1]) * 111320;
+
+const endSentence = text => (/[.:!?]$/.test(text) ? text : `${text}.`);
 
 function checkWhich(which) {
   if (which !== 'start' && which !== 'end') throw new TypeError("which must be 'start' or 'end'");
@@ -121,6 +123,7 @@ export class MapController {
     this.routeBanner = '';   // the last message about the current pair of endpoints
     this.tapTarget = 'end';   // the end a map tap fills
     this.locatedEnd = null;   // the end being set from the device location, while it's set
+    this.knownLocation = null;   // latest usable device location this session; in memory only
     this.closuresData = null;
     this.generatedAt = null;
     this.constrData = null;
@@ -142,7 +145,7 @@ export class MapController {
     try {
       this.attrib = new maplibregl.AttributionControl({
         compact: false,
-        customAttribution: OSM_ATTRIBUTION + ' · ' + CITY.attribution,
+        customAttribution: [OSM_ATTRIBUTION, ORS_ATTRIBUTION, CITY.attribution].join(' · '),
       });
       attribEl.appendChild(this.attrib.onAdd(map));
       ['mousedown', 'touchstart', 'wheel'].forEach(ev =>
@@ -152,11 +155,16 @@ export class MapController {
     }
 
     map.addControl(new maplibregl.NavigationControl({ showCompass: true, visualizePitch: true }), 'top-right');
-    map.addControl(new maplibregl.GeolocateControl({
+    const geolocate = new maplibregl.GeolocateControl({
       positionOptions: { enableHighAccuracy: true },
       trackUserLocation: true,
       showUserLocation: true,
-    }), 'top-right');
+    });
+    geolocate.on('geolocate', ({ coords }) => {
+      const here = [coords.longitude, coords.latitude];
+      if (inServiceArea(here) && coords.accuracy <= MAX_LOCATION_ACCURACY_M) this.knownLocation = here;
+    });
+    map.addControl(geolocate, 'top-right');
     map.addControl(this._toggle3DControl(), 'top-right');
 
     map.on('load', () => this._onLoad());
@@ -247,7 +255,18 @@ export class MapController {
       this.cb().onBanner?.('Turn on route mode to use your location.');
       return Promise.resolve('error');
     }
-    return this._locate(which, { explainOutOfArea: true });
+    return this._locate(which, { explainOutOfArea: true, trigger: 'manual' });
+  }
+
+  // What a search suggestion's distance is measured from while `which` is being
+  // edited: { point, name }. Never asks the browser for a location.
+  distanceOrigin(which) {
+    checkWhich(which);
+    const other = which === 'start' ? 'end' : 'start';
+    if (this.ends[other]) return { point: this.ends[other], name: other === 'start' ? 'start' : 'destination' };
+    if (this.knownLocation) return { point: this.knownLocation, name: 'your location' };
+    const { lng, lat } = this.map.getCenter();
+    return { point: [lng, lat], name: 'map centre' };
   }
 
   fitBounds(bounds, options) {
@@ -536,7 +555,7 @@ export class MapController {
     this.routingReady = true;
     if (BOOTH) {   // land in route planning with the pitch still showing
       this.planMode = true;
-      this.cb().onBanner?.(`${PITCH} Tap your start point`);
+      this.cb().onBanner?.(`${PITCH} ${TAP_PROMPT.start}`);
       this._locateStart();
     }
     this.cb().onRoutingReady?.({ planMode: this.planMode });
@@ -550,7 +569,7 @@ export class MapController {
     this._placeEndpoint('start', null);
     this._placeEndpoint('end', null);
     this._clearDrawnRoute();
-    this.cb().onBanner?.(this.planMode ? 'Tap your start point' : '');
+    this.cb().onBanner?.(this.planMode ? TAP_PROMPT.start : '');
     this.cb().onRouteCleared?.();
     this._emitEndpoints();
   }
@@ -565,7 +584,7 @@ export class MapController {
   // replaces this.locating[which], so a late result is dropped and can't
   // overwrite the newer state or banner. A change to the other end leaves the
   // lookup running. Warnings carry the error code only, never coordinates.
-  _locate(which, { explainOutOfArea = false } = {}) {
+  _locate(which, { explainOutOfArea = false, trigger = 'auto' } = {}) {
     const banner = text => this.cb().onBanner?.(text);
     const tap = TAP_PROMPT[which];
     const other = which === 'start' ? 'end' : 'start';
@@ -575,6 +594,7 @@ export class MapController {
     return new Promise((resolve) => {
       const finish = (outcome) => {
         if (this.locating[which] === lookup) this.locating[which] = null;
+        phTrack('geolocate_used', { end: which, trigger, outcome });   // a cancelled lookup never gets here
         resolve(outcome);
       };
       // If this end already has a point it stays, so keep what's still true
@@ -603,8 +623,9 @@ export class MapController {
           if (pos.coords.accuracy > MAX_LOCATION_ACCURACY_M) {
             return failed('low_accuracy', 'low-accuracy', "Your location isn't precise enough.");
           }
+          this.knownLocation = here;
           this.locatedEnd = which;
-          this.setEndpoint(which, here);
+          if (this.setEndpoint(which, here)) phTrack('endpoint_edited', { end: which, action: 'set', source: 'location' });
           this.locatedEnd = null;
           finish('success');
         },
@@ -670,7 +691,9 @@ export class MapController {
 
   _onRouteClick(e) {
     if (!this.planMode) return;
-    this.setEndpoint(this.tapTarget, [e.lngLat.lng, e.lngLat.lat]);
+    if (this.setEndpoint(this.tapTarget, [e.lngLat.lng, e.lngLat.lat])) {
+      phTrack('endpoint_edited', { end: this.tapTarget, action: 'set', source: 'tap' });
+    }
   }
 
   async _planCurrentRoute() {
@@ -745,10 +768,9 @@ export class MapController {
       const prefix = safeRouteMessage(result);
       if (prefix) text = prefix + ' ' + text;
       const constrNote = constrRouteNote(constrHits);
-      if (constrHits === null && constrNote && !text.endsWith('.')) text += '.';
-      text += constrNote;
+      if (constrNote) text = endSentence(text) + constrNote;
       const bowNote = bowNoteText(result, hits, closuresData);   // '' unless it applies
-      text += bowNote;
+      if (bowNote) text = endSentence(text) + bowNote;
       banner(text);
 
       this._phRouteShown(result.status, closedByName.size, constrHits,

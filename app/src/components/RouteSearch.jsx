@@ -1,7 +1,8 @@
 import { useEffect, useRef, useState } from 'react';
 import { CITY, IS_CALGARY } from '../core/config.js';
 import { createAddressIndex } from '../core/addressSearch.js';
-import { mergeRows, searchPlaces, shouldSearchPlaces } from '../core/placeSearch.js';
+import { addDistanceHints, MIN_CHARS, mergeRows, searchPlaces, shouldSearchPlaces } from '../core/placeSearch.js';
+import { phTrack } from '../core/analytics.js';
 
 const MY_LOCATION = 'My location';
 const DROPPED_PIN = 'Dropped pin';
@@ -22,6 +23,7 @@ const FIELDS = [
 const addressIndex = IS_CALGARY ? createAddressIndex(`${CITY.dataDir}/addr`) : null;   // kept for the session
 
 const samePoint = (a, b) => a === b || (!!a && !!b && a[0] === b[0] && a[1] === b[1]);
+const resultBucket = count => (count > 5 ? '6' : count > 1 ? '2-5' : String(count));
 
 function labelFor(which, endpoints, chosen) {
   const point = endpoints[which];
@@ -60,6 +62,7 @@ export default function RouteSearch({ controller, endpoints, hidden }) {
   const chosen = useRef({ start: null, end: null });
   const card = useRef(null);
   const inputs = useRef({});
+  const searchReported = useRef(false);   // this field edit has already sent address_searched
 
   // A lookup's end always changes the endpoints or the banner, so this re-renders then.
   const lookupRunning = !!controller.current?.isLocating();
@@ -120,17 +123,29 @@ export default function RouteSearch({ controller, endpoints, hidden }) {
     setEditing(which);
     setLastFocused(which);
     resetSearch();
+    searchReported.current = false;
     addressIndex?.ready();
   };
 
+  // Enums only: never the query, a label or a point.
+  const reportSearch = (picked, source) => {
+    if (searchReported.current) return;
+    searchReported.current = true;
+    phTrack('address_searched', { picked, source, result_bucket: resultBucket(rows.length), unavailable });
+  };
+
   const pickAddress = (which, row) => {
+    reportSearch(true, row.source ?? 'city');
     chosen.current[which] = { point: row.point, label: row.label };
-    controller.current?.setEndpoint(which, row.point);
+    if (controller.current?.setEndpoint(which, row.point)) {
+      phTrack('endpoint_edited', { end: which, action: 'set', source: 'search' });
+    }
     closeKeyboard(which);
     fitEndpoints();
   };
 
   const useMyLocation = async (which) => {
+    reportSearch(true, 'location');
     closeKeyboard(which);
     const outcome = await controller.current?.locateEndpoint(which);   // the banner reports every failure
     if (outcome === 'success') fitEndpoints();
@@ -138,10 +153,19 @@ export default function RouteSearch({ controller, endpoints, hidden }) {
 
   const clearField = (which) => {
     if (editing === which && query) resetSearch();
-    else controller.current?.clearEndpoint(which);
+    else if (endpoints[which] && controller.current?.clearEndpoint(which)) {
+      phTrack('endpoint_edited', { end: which, action: 'clear', source: 'search' });
+    }
   };
 
-  const rows = mergeRows(result.status === 'ok' ? result.rows : [], places.status === 'ok' ? places.rows : []);
+  const swapEnds = () => {
+    if (controller.current?.swapEndpoints()) phTrack('endpoint_edited', { end: 'start', action: 'swap', source: 'search' });
+  };
+
+  const rows = addDistanceHints(
+    mergeRows(result.status === 'ok' ? result.rows : [], places.status === 'ok' ? places.rows : []),
+    editing ? controller.current?.distanceOrigin(editing) : null,
+  );
   const settled = places.query === query;   // every lookup for what's typed has finished
   const unavailable = places.status === 'unavailable';
   const noMatch = settled && !rows.length && !unavailable && (result.status === 'ok' || places.status === 'ok');
@@ -162,7 +186,10 @@ export default function RouteSearch({ controller, endpoints, hidden }) {
                   placeholder={editing === which && labels[which] ? labels[which] : name}
                   value={editing === which ? query : labels[which]}
                   onFocus={() => focusField(which)}
-                  onBlur={() => setEditing(null)}
+                  onBlur={() => {
+                    if (query.trim().length >= MIN_CHARS) reportSearch(false, 'none');
+                    setEditing(null);
+                  }}
                   onChange={e => setQuery(e.target.value)}
                   onKeyDown={(e) => {
                     if (e.key === 'Enter' && settled && rows.length) pickAddress(which, rows[0]);
@@ -180,7 +207,7 @@ export default function RouteSearch({ controller, endpoints, hidden }) {
           </div>
           <button type="button" aria-label="Swap start and destination"
                   disabled={!endpoints.start && !endpoints.end}
-                  onMouseDown={keepFocus} onClick={() => controller.current?.swapEndpoints()}
+                  onMouseDown={keepFocus} onClick={swapEnds}
                   className="w-11 shrink-0 cursor-pointer border-l border-neutral-200 text-xl text-link disabled:cursor-default disabled:text-neutral-400">
             ⇅
           </button>
@@ -197,7 +224,7 @@ export default function RouteSearch({ controller, endpoints, hidden }) {
               <button key={row.id} type="button" data-suggestion="address"
                       onMouseDown={keepFocus} onClick={() => pickAddress(editing, row)}
                       className="flex min-h-11 w-full cursor-pointer items-center border-t border-neutral-100 px-3 py-2 text-left">
-                {row.label}
+                <span>{row.label}{row.hint && <span className="text-neutral-600"> · {row.hint}</span>}</span>
               </button>
             ))}
             {(noMatch || unavailable) && (
