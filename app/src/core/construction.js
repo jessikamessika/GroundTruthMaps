@@ -8,13 +8,20 @@ import { distToFeatureM } from './routing.js';
 export const CONSTR_NOTE =
   'Closure type not specified by the City (single-lane, full road, sidewalks etc.). Check before riding.';
 
+const isLngLatPoint = g => !!g && g.type === 'Point' && Array.isArray(g.coordinates) &&
+  g.coordinates.length >= 2 && g.coordinates.slice(0, 2).every(n => typeof n === 'number' && Number.isFinite(n));
+
 // Fail closed: anything other than a valid FeatureCollection with a
-// `features` array is "unavailable", never "no construction".
+// `features` array of GeoJSON Points is "unavailable", never "no construction".
+// One bad geometry fails the lot: points the map can't draw and the route
+// check can't measure would otherwise read as "no construction here".
 export async function fetchConstruction() {
   const r = await fetch(CONSTR_URL);
   if (!r.ok) throw new Error('HTTP ' + r.status);
   const data = await r.json();
   if (!data || !Array.isArray(data.features)) throw new Error('response has no features array');
+  const bad = data.features.filter(f => !f || !isLngLatPoint(f.geometry)).length;
+  if (bad) throw new Error(`${bad} of ${data.features.length} features have no valid Point geometry`);
   return data;
 }
 

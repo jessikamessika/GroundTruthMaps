@@ -10,6 +10,16 @@ const originAllowed = (origin, env) =>
   ALLOWED_ORIGINS.has(origin) || (!!env.DEV_ORIGIN && origin === env.DEV_ORIGIN);
 const CACHE_SECONDS = 900;
 
+// Since 2026-11-17 the City's `point` column is WKT text ("POINT (lon lat)"), not
+// GeoJSON. Build the Point from the numeric `longitude`/`latitude` columns; null
+// (row dropped) when they don't parse, so no invalid geometry reaches the map.
+const toPoint = r => {
+  const lng = parseFloat(r.longitude), lat = parseFloat(r.latitude);
+  if (Number.isFinite(lng) && Number.isFinite(lat)) return { type: 'Point', coordinates: [lng, lat] };
+  if (r.point && typeof r.point === 'object' && r.point.type === 'Point') return r.point;   // old GeoJSON format
+  return null;
+};
+
 export default {
   async fetch(req, env) {
     const origin = req.headers.get('Origin') || '';
@@ -34,8 +44,8 @@ export default {
       const geojson = {
         type: 'FeatureCollection',
         fetched_at: new Date().toISOString(),
-        features: rows.filter(r => r.point).map(r => ({
-          type: 'Feature', geometry: r.point,
+        features: rows.map(r => ({ r, geometry: toPoint(r) })).filter(x => x.geometry).map(({ r, geometry }) => ({
+          type: 'Feature', geometry,
           properties: { info: r.construction_info, description: r.description || '', start: r.start_dt, end: r.end_dt }
         }))
       };
