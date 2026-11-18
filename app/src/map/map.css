@@ -8,7 +8,7 @@
   --color-detour: #7c3aed;
   --color-reduced: #f59e0b;
   --color-network: #7a8ca5;
-  --color-construction: #0d9488;
+  --color-construction: #e11d48;   /* same red as closed paths (--color-closed) */
   --color-danger-bg: #fef2f2;
   --color-danger-ink: #7f1d1d;
   --color-danger-line: #fecaca;

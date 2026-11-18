@@ -33,7 +33,7 @@ export const SMALL_SCREEN = window.matchMedia('(max-width: 600px)');
 
 // Third-party endpoints
 export const ORS_PROXY_URL = 'https://ors-proxy.jess-jm-zhang.workers.dev';
-export const CONSTR_URL = 'https://construction-proxy.jess-jm-zhang.workers.dev/';
+export const CONSTR_URL = 'https://construction-proxy.jess-jm-zhang.workers.dev';
 export const SIGNUP_URL = 'https://script.google.com/macros/s/AKfycbxJ7UAYDDpUQCGJ8hSNmVkuEXa4L6TofjYZ_7aqJnfvquSm4e0TfWCoDQ2z4I3DZAY/exec';   // Apps Script web app (api/apps-script/signup.gs)
 export const PRIVACY_URL = 'https://jessikamessika.github.io/GroundTruthMaps/web/privacy.html';
 export const CONTACT_EMAIL = 'jess.jm.zhang@gmail.com';

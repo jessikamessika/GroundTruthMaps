@@ -821,7 +821,7 @@ export class MapController {
       map.addSource(CONSTR_SOURCE, { type: 'geojson', data });
       map.addLayer({ id: CONSTR_LAYER, type: 'circle', source: CONSTR_SOURCE,
         paint: {
-          'circle-color': '#0d9488',
+          'circle-color': '#e11d48',   // same red as closures-current
           'circle-radius': ['interpolate', ['linear'], ['zoom'], 10, 3, 13, 5, 16, 8, 18, 11],
           'circle-stroke-color': '#fff',
           'circle-stroke-width': 2,
