@@ -108,7 +108,7 @@ export default function LegendPanel({
         )}
         {CITY.construction && (
           <Row checked={layers.construction} onChange={v => setLayer('construction', v)}
-               swatch={<span className="mx-[5px] h-3 w-3 flex-none rounded-full bg-construction shadow-[0_0_0_2px_#fff,0_0_0_3px_#0d9488]" />}>
+               swatch={<span className="mx-[5px] h-3 w-3 flex-none rounded-full bg-construction shadow-[0_0_0_2px_#fff,0_0_0_3px_#e11d48]" />}>
             <span>
               Construction detours (City)
               <span className={'block text-xs ' + (constr.bad ? 'font-semibold text-danger-ink' : 'text-neutral-600')}>
