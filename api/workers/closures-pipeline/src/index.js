@@ -16,29 +16,29 @@
 const CONSTRUCTION_LIMIT = 5000;
 
 const DATASETS = [
-  {
-    id: "w8zq-79bq",
-    name: "Construction Closures", // City's database named "Construction Detours"
-    limit: CONSTRUCTION_LIMIT,
-	url: "https://data.calgary.ca/resource/w8zq-79bq.json?$limit=" + String(CONSTRUCTION_LIMIT),
-	requiredFields: ["start_dt", "end_dt", "longitude", "latitude", "construction_info"],
-	// cleanSchema (PLANNED, not implemented): what each row looks like AFTER cleaning.
-	// requiredFields = what we need to trust the RAW data.
-	// cleanSchema    = the contract our API promises.
-	//   rowID:           datasetId|construction_info|start_dt
-	//           		  (if that key repeats, also append |description;
-	//            		  if it STILL repeats, the rows are true copies: keep one)
-	//   lon, lat:        numbers, parsed from the strings (parseFloat is the function)
-	//   start, end:      ISO 8601 string with -06:00 offset (from Calgary-local start_dt)
-	//   active:          computed, see Stage 4
-	//   sourceDatasetId: the dataset's id (w8zq-79bq)
-	//   popup fields:    name (from construction_info) and description
-    baselineRows: 140,
-	lowCountAcceptAfter: 3,   // accept a big drop after this many consistent low runs
-    jumpWarnRatio: 1.5,       // warn (not fail) if rows exceed baseline by 50%+
-	metaUrl: "https://data.calgary.ca/api/views/w8zq-79bq.json",
-    updatedAtUnit: "seconds", // Socrata. ArcGIS (dataset #2) is milliseconds.
-  },
+	{
+		id: "w8zq-79bq",
+		name: "Construction Closures", // City's database named "Construction Detours"
+		limit: CONSTRUCTION_LIMIT,
+		url: "https://data.calgary.ca/resource/w8zq-79bq.json?$limit=" + String(CONSTRUCTION_LIMIT),
+		requiredFields: ["start_dt", "end_dt", "longitude", "latitude", "construction_info"],
+		// cleanSchema (PLANNED, not implemented): what each row looks like AFTER cleaning.
+		// requiredFields = what we need to trust the RAW data.
+		// cleanSchema    = the contract our API promises.
+		//   rowID:           datasetId|construction_info|start_dt
+		//                    (if that key repeats, also append |description;
+		//                     if it STILL repeats, the rows are true copies: keep one)
+		//   lon, lat:        numbers, parsed from the strings (parseFloat is the function)
+		//   start, end:      ISO 8601 string with -06:00 offset (from Calgary-local start_dt)
+		//   active:          computed, see Stage 4
+		//   sourceDatasetId: the dataset's id (w8zq-79bq)
+		//   popup fields:    name (from construction_info) and description
+		baselineRows: 140,
+		lowCountAcceptAfter: 3,   // accept a big drop after this many consistent low runs
+		jumpWarnRatio: 1.5,       // warn (not fail) if rows exceed baseline by 50%+
+		metaUrl: "https://data.calgary.ca/api/views/w8zq-79bq.json",
+		updatedAtUnit: "seconds", // Socrata. ArcGIS (dataset #2) is milliseconds.
+	},
 ];
 
 // Records a rejected run: updates meta only. Never touches DATA_KEY (fail-closed).
@@ -55,21 +55,25 @@ async function recordFailure(env, metaKey, prevMeta, now, reason, extra = {}) {
 	// NOTE: no put to DATA_KEY here. That absence IS the fail-closed rule.
 }
 
-// TEMPORARY (checkpoint only): read both keys back and print what's stored.
-async function debugReadBack(env, dataKey, metaKey) {
-        const data = await env.PIPELINE_KV.get(dataKey, { type: "json" });
-        const meta = await env.PIPELINE_KV.get(metaKey, { type: "json" });
-        console.log("READBACK", dataKey, "->", data === null ? "null (never written)" : data.length + " rows, first:", data?.[0]);
-        console.log("READBACK", metaKey, "->", meta);
-}
+// TEMPORARY, commented out until Stage 4 (/status replaces it). To use it for a test:
+// uncomment this function AND the debugReadBack calls in scheduled() below.
+// async function debugReadBack(env, dataKey, metaKey) {
+// 	const data = await env.PIPELINE_KV.get(dataKey, { type: "json" });
+// 	const meta = await env.PIPELINE_KV.get(metaKey, { type: "json" });
+// 	console.log("READBACK", dataKey, "->", data === null ? "null (never written)" : data.length + " rows, first:", data?.[0]);
+// 	console.log("READBACK", metaKey, "->", meta);
+// }
 
 export default {
-	async fetch(req) {
-		const url = new URL(req.url)
-		url.pathname = "/__scheduled";
-		url.searchParams.append("cron", "*/23 * * * *");
-		return new Response(`To test the scheduled handler, ensure you have used the "--test-scheduled" then try running "curl ${url.href}".`);
-	},
+	// Cloudflare template fetch handler, commented out until Stage 4 replaces it with
+	// GET /closures.geojson and GET /status. Local testing still works: --test-scheduled
+	// serves /__scheduled without it.
+	// async fetch(req) {
+	// 	const url = new URL(req.url)
+	// 	url.pathname = "/__scheduled";
+	// 	url.searchParams.append("cron", "*/23 * * * *");
+	// 	return new Response(`To test the scheduled handler, ensure you have used the "--test-scheduled" then try running "curl ${url.href}".`);
+	// },
 
 	// The scheduled handler is invoked at the interval set in our wrangler.jsonc's
 	// [[triggers]] configuration.
@@ -81,27 +85,27 @@ export default {
 		const META_KEY = `${dataset.id}:meta`;
 
 		const prevMeta = (await env.PIPELINE_KV.get(META_KEY, { type: "json" })) || {
-  			runsTotal: 0,
-  			runsRejected: 0,
+			runsTotal: 0,
+			runsRejected: 0,
 		};
 		const now = new Date().toISOString();
 
 		const warnings = []; // const is fine: we push into the array, never replace it
 
 		// Check 1: HTTP status
-  		let resp;
+		let resp;
 		try {
 			resp = await fetch(dataset.url);
 		} catch (err) {
 			console.log("FAIL check 1 (network):", err.message);
 			await recordFailure(env, META_KEY, prevMeta, now, "check 1: network " + err.message);
-			await debugReadBack(env, DATA_KEY, META_KEY);
+			// await debugReadBack(env, DATA_KEY, META_KEY);
 			return;
 		}
 		if (resp.status !== 200) {
 			console.log("FAIL check 1 (status):", resp.status);
 			await recordFailure(env, META_KEY, prevMeta, now, "check 1: status " + resp.status);
-			await debugReadBack(env, DATA_KEY, META_KEY);
+			// await debugReadBack(env, DATA_KEY, META_KEY);
 			return;
 		}
 
@@ -112,13 +116,13 @@ export default {
 		} catch (err) {
 			console.log("FAIL check 2 (JSON parse):", err.message);
 			await recordFailure(env, META_KEY, prevMeta, now, "check 2: JSON parse " + err.message);
-			await debugReadBack(env, DATA_KEY, META_KEY);
+			// await debugReadBack(env, DATA_KEY, META_KEY);
 			return;
 		}
 		if (!Array.isArray(rows)) {
 			console.log("FAIL check 2 (not an array)");
 			await recordFailure(env, META_KEY, prevMeta, now, "check 2: not an array");
-			await debugReadBack(env, DATA_KEY, META_KEY);
+			// await debugReadBack(env, DATA_KEY, META_KEY);
 			return;
 		}
 
@@ -127,7 +131,7 @@ export default {
 		if (rows.length === 0) {
 			console.log("FAIL check 3 (zero rows)");
 			await recordFailure(env, META_KEY, prevMeta, now, "check 3: zero rows");
-			await debugReadBack(env, DATA_KEY, META_KEY);
+			// await debugReadBack(env, DATA_KEY, META_KEY);
 			return;
 		}
 		// rows dropped by > half: fail, unless it's the Nth consistent low run in a row
@@ -143,7 +147,7 @@ export default {
 				await recordFailure(env, META_KEY, prevMeta, now,
 					`check 3: rows ${rows.length} vs baseline ${baseline} (low streak ${streak}/${dataset.lowCountAcceptAfter})`,
 					{ lowCountStreak: streak, lowCountLast: rows.length });
-				await debugReadBack(env, DATA_KEY, META_KEY);
+				// await debugReadBack(env, DATA_KEY, META_KEY);
 				return;
 			}
 			console.log("WARN: accepting low row count after", streak, "consistent low runs");
@@ -171,7 +175,7 @@ export default {
 		}
 		if (badFields.length > 0) {
 			await recordFailure(env, META_KEY, prevMeta, now, "check 4: missing " + badFields.join(", "));
-			await debugReadBack(env, DATA_KEY, META_KEY);
+			// await debugReadBack(env, DATA_KEY, META_KEY);
 			return;
 		}
 
@@ -211,6 +215,6 @@ export default {
 		} else {
 			console.log("All checks passed: kept new data");
 		}
-	await debugReadBack(env, DATA_KEY, META_KEY);
+		// await debugReadBack(env, DATA_KEY, META_KEY);
 	},
 };
