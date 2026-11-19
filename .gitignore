@@ -236,3 +236,6 @@ app/public/data/.addr-*/
 
 # Vite cache
 app/.vite/
+
+# Local files
+claude_food_gtm/
