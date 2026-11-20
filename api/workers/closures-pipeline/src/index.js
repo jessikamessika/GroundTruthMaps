@@ -187,25 +187,146 @@ function normalize(rows, dataset) {
 	return { rows: clean, stats };   // return two things at once by wrapping them in an object
 }
 
-// TEMPORARY, commented out until Stage 4 (/status replaces it). To use it for a test:
-// uncomment this function AND the debugReadBack calls in scheduled() below.
-// async function debugReadBack(env, dataKey, metaKey) {
-// 	const data = await env.PIPELINE_KV.get(dataKey, { type: "json" });
-// 	const meta = await env.PIPELINE_KV.get(metaKey, { type: "json" });
-// 	console.log("READBACK", dataKey, "->", data === null ? "null (never written)" : data.length + " rows, first:", data?.[0]);
-// 	console.log("READBACK", metaKey, "->", meta);
-// }
+// Browsers only let a web page call our API if we say its origin is allowed.
+// An "origin" is scheme + host + port, e.g. "http://localhost:8000".
+const ALLOWED_ORIGINS = [
+	"https://jessikamessika.github.io",
+	"http://127.0.0.1:8000",
+	"http://localhost:8000",
+]
+// Builds the CORS headers for one request.
+function corsHeaders(request) {
+	// .get() returns null when the header is missing (e.g. curl, or same-origin calls)
+	const origin = request.headers.get("Origin");
+	// "Vary: Origin" tells caches the answer depends on who is asking
+	const headers = { "Vary": "Origin" };
+	// .includes() is true only if the origin is exactly one of the allowed strings
+	if (origin && ALLOWED_ORIGINS.includes(origin)) {
+		// We echo back the caller's own origin; we never send "*"
+		headers["Access-Control-Allow-Origin"] = origin;
+	}
+	return headers;
+}
+
+// One helper for every JSON answer, so headers can't be forgotten.
+// `status = 200` is a default parameter: used when the caller passes nothing.
+// `extra = {}` lets a caller add headers (e.g. Cache-Control).
+function json(request, body, status = 200, extra = {}) {
+	return new Response(JSON.stringify(body), {
+		status,
+		headers: {
+			"Content-Type": "application/json; charset=utf-8",
+			...corsHeaders(request), // spread: copies each key into this object
+			...extra,                // later spreads win if a key repeats
+		},
+	});
+}
+
+// How old data may get before we call it stale. The cron runs every 3 h,
+// so 7 h means "two runs in a row missed".
+const STALE_AFTER_MS = 7 * 60 * 60 * 1000; // ms = hours x minutes x seconds x 1000
+
+// true if we have no successful run on record, or the last one is too old
+function isStale(meta, nowMs) {
+	// `meta?.lastSuccess` is "optional chaining": if meta is null it gives
+	// undefined instead of crashing with "cannot read property of null"
+	if (!meta?.lastSuccess) return true;
+	// Date.parse turns an ISO string into milliseconds since 1970
+	return nowMs - Date.parse(meta.lastSuccess) > STALE_AFTER_MS;
+}
+
+async function handleClosures(request, env) {
+	const dataset = DATASETS[0];
+	const clean = await env.PIPELINE_KV.get(`${dataset.id}:clean`, { type: "json" });
+	const meta = await env.PIPELINE_KV.get(`${dataset.id}:meta`, { type: "json" });
+
+	// Fail closed: no clean data means "we don't know", never "no closures".
+	// "no-store" stops anyone caching the error; Retry-After is a hint in seconds.
+	if (!clean) {
+		return json(request, { error: "no clean data available yet" }, 503,
+			{ "Cache-Control": "no-store", "Retry-After": "600" });
+	}
+
+	const nowMs = Date.now();
+	// ?active=true in the address -> only closures happening right now
+	const onlyActive = new URL(request.url).searchParams.get("active") === "true";
+
+	const features = [];
+	for (const row of clean) {
+		// The strings end in -06:00, so Date.parse gives the exact moment
+		const active = Date.parse(row.start) <= nowMs && nowMs <= Date.parse(row.end);
+		if (onlyActive && !active) continue; // skip this row, go to the next
+		// Destructuring with rest: pull out lon and lat, everything else lands in `props`
+		const { lon, lat, ...props } = row;
+		features.push({
+			type: "Feature",
+			geometry: { type: "Point", coordinates: [lon, lat] }, // GeoJSON order is lon, lat
+			properties: { ...props, active },
+		});
+	}
+
+	return json(request, {
+		type: "FeatureCollection",
+		fetched_at: meta?.lastSuccess ?? null, // ?? gives null if the left side is null/undefined
+		stale: isStale(meta, nowMs),
+		features,
+	}, 200, { "Cache-Control": "public, max-age=60" });
+}
+
+// How old the CITY's own data may get before we flag it.
+// Separate from STALE_AFTER_MS: that one is about OUR pipeline running, this one
+// is about the City publishing.
+const CITY_STALE_AFTER_MS = 48 * 60 * 60 * 1000;
+
+async function handleStatus(request, env) {
+	const dataset = DATASETS[0];
+	const meta = await env.PIPELINE_KV.get(`${dataset.id}:meta`, { type: "json" });
+	const nowMs = Date.now();
+
+	// Never fails: no meta just means no run has ever finished writing one
+	if (!meta) {
+		return json(request,
+			{ dataset: dataset.id, status: "never run", stale: true, cityStale: null },
+			200, { "Cache-Control": "no-store" });
+	}
+
+	// Ternary: `condition ? valueIfTrue : valueIfFalse`.
+	// null means "unknown" (no timestamp yet), not "fresh".
+	const cityStale = meta.sourceUpdatedAt
+		? nowMs - Date.parse(meta.sourceUpdatedAt) > CITY_STALE_AFTER_MS
+		: null;
+
+	return json(request, {
+		dataset: dataset.id,
+		...meta, // spread: every field of the stored meta, then our computed ones below
+		stale: isStale(meta, nowMs),
+		cityStale,
+		checkedAt: new Date(nowMs).toISOString(),
+	}, 200, { "Cache-Control": "no-store" });
+}
 
 export default {
-	// Cloudflare template fetch handler, commented out until Stage 4 replaces it with
-	// GET /closures.geojson and GET /status. Local testing still works: --test-scheduled
-	// serves /__scheduled without it.
-	// async fetch(req) {
-	// 	const url = new URL(req.url)
-	// 	url.pathname = "/__scheduled";
-	// 	url.searchParams.append("cron", "*/23 * * * *");
-	// 	return new Response(`To test the scheduled handler, ensure you have used the "--test-scheduled" then try running "curl ${url.href}".`);
-	// },
+
+	// Runs on every HTTP request. `env` holds bindings such as PIPELINE_KV.
+	async fetch(request, env) {
+		// Only reading is allowed; anything else gets 405 "Method Not Allowed"
+		if (request.method !== "GET") {
+			return json(request, { error: "method not allowed" }, 405, { "Allow": "GET" });
+		}
+
+		// new URL(...) splits the address; .pathname is just "/status", without ?query
+		const url = new URL(request.url);
+
+		if (url.pathname === "/closures.geojson") {
+			return handleClosures(request, env);
+		}
+		if (url.pathname === "/status") {
+			return handleStatus(request, env);
+		}
+
+		// Everything else
+		return json(request, { error: "not found" }, 404);
+	},
 
 	// The scheduled handler is invoked at the interval set in our wrangler.jsonc's
 	// [[triggers]] configuration.
@@ -231,13 +352,11 @@ export default {
 		} catch (err) {
 			console.log("FAIL check 1 (network):", err.message);
 			await recordFailure(env, META_KEY, prevMeta, now, "check 1: network " + err.message);
-			// await debugReadBack(env, DATA_KEY, META_KEY);
 			return;
 		}
 		if (resp.status !== 200) {
 			console.log("FAIL check 1 (status):", resp.status);
 			await recordFailure(env, META_KEY, prevMeta, now, "check 1: status " + resp.status);
-			// await debugReadBack(env, DATA_KEY, META_KEY);
 			return;
 		}
 
@@ -248,13 +367,11 @@ export default {
 		} catch (err) {
 			console.log("FAIL check 2 (JSON parse):", err.message);
 			await recordFailure(env, META_KEY, prevMeta, now, "check 2: JSON parse " + err.message);
-			// await debugReadBack(env, DATA_KEY, META_KEY);
 			return;
 		}
 		if (!Array.isArray(rows)) {
 			console.log("FAIL check 2 (not an array)");
 			await recordFailure(env, META_KEY, prevMeta, now, "check 2: not an array");
-			// await debugReadBack(env, DATA_KEY, META_KEY);
 			return;
 		}
 
@@ -263,7 +380,6 @@ export default {
 		if (rows.length === 0) {
 			console.log("FAIL check 3 (zero rows)");
 			await recordFailure(env, META_KEY, prevMeta, now, "check 3: zero rows");
-			// await debugReadBack(env, DATA_KEY, META_KEY);
 			return;
 		}
 		// rows dropped by > half: fail, unless it's the Nth consistent low run in a row
@@ -279,7 +395,6 @@ export default {
 				await recordFailure(env, META_KEY, prevMeta, now,
 					`check 3: rows ${rows.length} vs baseline ${baseline} (low streak ${streak}/${dataset.lowCountAcceptAfter})`,
 					{ lowCountStreak: streak, lowCountLast: rows.length });
-				// await debugReadBack(env, DATA_KEY, META_KEY);
 				return;
 			}
 			console.log("WARN: accepting low row count after", streak, "consistent low runs");
@@ -307,7 +422,6 @@ export default {
 		}
 		if (badFields.length > 0) {
 			await recordFailure(env, META_KEY, prevMeta, now, "check 4: missing " + badFields.join(", "));
-			// await debugReadBack(env, DATA_KEY, META_KEY);
 			return;
 		}
 
@@ -399,7 +513,6 @@ export default {
 			console.log("All checks passed: kept new data");
 		}
 
-		// await debugReadBack(env, DATA_KEY, META_KEY);
 		// TEMPORARY, commented out until Stage 4: read the clean copy back for a test.
 		// const cleanBack = await env.PIPELINE_KV.get(CLEAN_KEY, { type: "json" });
 		// console.log("READBACK clean:", cleanBack.length, "rows; first two:", cleanBack.slice(0, 2));
