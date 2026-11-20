@@ -257,6 +257,84 @@ function isStale(meta, nowMs) {
 	return nowMs - Date.parse(meta.lastSuccess) > STALE_AFTER_MS;
 }
 
+// Mean Earth radius in km. Treating the Earth as a sphere is off by <0.5%: fine for "within 10 km".
+const EARTH_RADIUS_KM = 6371;
+
+// Math.sin/Math.cos expect radians, not degrees. 180° = π radians.
+function toRadians(degrees) {
+	return degrees * Math.PI / 180;
+}
+
+// Great-circle distance in km between two points given in degrees.
+// "Great circle" = the shortest path along the sphere's surface, not a straight line through it.
+function haversineKm(lat1, lon1, lat2, lon2) {
+	// How far apart the two points are, north-south and east-west, as angles in radians
+	const dLat = toRadians(lat2 - lat1);
+	const dLon = toRadians(lon2 - lon1);
+
+	// `a` combines both differences. The east-west part is multiplied by cos(lat) for each
+	// point: meridians converge toward the poles, so a degree of longitude shrinks with latitude.
+	// `** 2` means "squared".
+	const a = Math.sin(dLat / 2) ** 2
+		+ Math.cos(toRadians(lat1)) * Math.cos(toRadians(lat2)) * Math.sin(dLon / 2) ** 2;
+
+	// `c` is the angle between the two points as seen from the Earth's centre, in radians
+	const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+
+	// Arc length = radius × angle (in radians). That's why we needed radians.
+	return EARTH_RADIUS_KM * c;
+}
+
+// Limits for /nearby (decided in Stage 4b)
+const DEFAULT_RADIUS_KM = 10;
+const MAX_RADIUS_KM = 100;
+
+// Turns one query parameter into a number, or explains why it can't.
+// Returns { ok: true, value } or { ok: false, error }.
+function parseNumberParam(params, name) {
+	const raw = params.get(name); // a string, or null if missing
+	// Check "missing" BEFORE Number(): Number(null) and Number("") are both 0
+	if (raw === null || raw === "") {
+		return { ok: false, error: `missing required parameter: ${name}` };
+	}
+	const value = Number(raw); // "51abc" -> NaN, unlike parseFloat
+	if (!Number.isFinite(value)) {
+		return { ok: false, error: `${name} must be a number, got "${raw}"` };
+	}
+	return { ok: true, value };
+}
+
+// Reads and checks lat, lon and radius_km for /nearby.
+// Returns { ok: true, lat, lon, radiusKm } or { ok: false, error }.
+function parseNearbyQuery(params) {
+	const latRead = parseNumberParam(params, "lat");
+	if (!latRead.ok) return latRead; // pass the error object straight up
+	const lonRead = parseNumberParam(params, "lon");
+	if (!lonRead.ok) return lonRead;
+
+	const lat = latRead.value;
+	const lon = lonRead.value;
+	if (lat < -90 || lat > 90) {
+		return { ok: false, error: `lat must be between -90 and 90, got ${lat}` };
+	}
+	if (lon < -180 || lon > 180) {
+		return { ok: false, error: `lon must be between -180 and 180, got ${lon}` };
+	}
+
+	// radius_km is optional: missing means the default
+	let radiusKm = DEFAULT_RADIUS_KM; // `let` (not const) because we may replace it below
+	if (params.get("radius_km") !== null) {
+		const radiusRead = parseNumberParam(params, "radius_km");
+		if (!radiusRead.ok) return radiusRead; // e.g. ?radius_km= (empty) or ?radius_km=ten
+		radiusKm = radiusRead.value;
+		if (radiusKm <= 0 || radiusKm > MAX_RADIUS_KM) {
+			return { ok: false, error: `radius_km must be more than 0 and at most ${MAX_RADIUS_KM}, got ${radiusKm}` };
+		}
+	}
+
+	return { ok: true, lat, lon, radiusKm };
+}
+
 // Turns clean rows into GeoJSON Features. Every endpoint that returns closures
 // calls this, so "active" and the geometry are computed in exactly one place.
 function buildFeatures(clean, nowMs, options = {}) {
