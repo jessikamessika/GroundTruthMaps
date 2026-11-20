@@ -222,6 +222,28 @@ function json(request, body, status = 200, extra = {}) {
 	});
 }
 
+// Reads one KV key and parses it as JSON, without ever crashing the request.
+// Returns { ok, value }:
+//   { ok: true,  value: <data> }  -> read fine (value is null if the key doesn't exist)
+//   { ok: false, value: null }    -> the stored text was corrupt or KV failed
+async function readKey(env, key) {
+	try {
+		// { type: "json" } makes KV parse the text; it THROWS if the text isn't valid JSON
+		const value = await env.PIPELINE_KV.get(key, { type: "json" });
+		return { ok: true, value }; // shorthand for { ok: true, value: value }
+	} catch (err) {
+		// A throw anywhere inside `try` jumps here instead of crashing with a 500
+		console.error(`could not read KV key ${key}:`, err);
+		return { ok: false, value: null };
+	}
+}
+
+// The one fail-closed answer: "we don't know" (503), never "no closures".
+function unavailable(request, message) {
+	return json(request, { error: message }, 503,
+		{ "Cache-Control": "no-store", "Retry-After": "600" });
+}
+
 // How old data may get before we call it stale. The cron runs every 3 h,
 // so 7 h means "two runs in a row missed".
 const STALE_AFTER_MS = 7 * 60 * 60 * 1000; // ms = hours x minutes x seconds x 1000
@@ -235,21 +257,10 @@ function isStale(meta, nowMs) {
 	return nowMs - Date.parse(meta.lastSuccess) > STALE_AFTER_MS;
 }
 
-async function handleClosures(request, env) {
-	const dataset = DATASETS[0];
-	const clean = await env.PIPELINE_KV.get(`${dataset.id}:clean`, { type: "json" });
-	const meta = await env.PIPELINE_KV.get(`${dataset.id}:meta`, { type: "json" });
-
-	// Fail closed: no clean data means "we don't know", never "no closures".
-	// "no-store" stops anyone caching the error; Retry-After is a hint in seconds.
-	if (!clean) {
-		return json(request, { error: "no clean data available yet" }, 503,
-			{ "Cache-Control": "no-store", "Retry-After": "600" });
-	}
-
-	const nowMs = Date.now();
-	// ?active=true in the address -> only closures happening right now
-	const onlyActive = new URL(request.url).searchParams.get("active") === "true";
+// Turns clean rows into GeoJSON Features. Every endpoint that returns closures
+// calls this, so "active" and the geometry are computed in exactly one place.
+function buildFeatures(clean, nowMs, options = {}) {
+	const { onlyActive = false } = options; // false if the caller didn't say
 
 	const features = [];
 	for (const row of clean) {
@@ -264,12 +275,29 @@ async function handleClosures(request, env) {
 			properties: { ...props, active },
 		});
 	}
+	return features; // the caller wraps this in a FeatureCollection
+}
+
+async function handleClosures(request, env) {
+	const dataset = DATASETS[0];
+	const cleanRead = await readKey(env, `${dataset.id}:clean`);
+	const metaRead = await readKey(env, `${dataset.id}:meta`);
+
+	// Fail closed: missing OR unreadable clean data means "we don't know"
+	if (!cleanRead.ok || !Array.isArray(cleanRead.value)) {
+		return unavailable(request, "clean data unavailable");
+	}
+	const clean = cleanRead.value;
+	const meta = metaRead.value; // null if missing/corrupt -> isStale() says stale: true
+
+	const nowMs = Date.now();
+	const onlyActive = new URL(request.url).searchParams.get("active") === "true";
 
 	return json(request, {
 		type: "FeatureCollection",
-		fetched_at: meta?.lastSuccess ?? null, // ?? gives null if the left side is null/undefined
+		fetched_at: meta?.lastSuccess ?? null,
 		stale: isStale(meta, nowMs),
-		features,
+		features: buildFeatures(clean, nowMs, { onlyActive }), // { onlyActive } = { onlyActive: onlyActive }
 	}, 200, { "Cache-Control": "public, max-age=60" });
 }
 
@@ -280,10 +308,17 @@ const CITY_STALE_AFTER_MS = 48 * 60 * 60 * 1000;
 
 async function handleStatus(request, env) {
 	const dataset = DATASETS[0];
-	const meta = await env.PIPELINE_KV.get(`${dataset.id}:meta`, { type: "json" });
+	const metaRead = await readKey(env, `${dataset.id}:meta`);
 	const nowMs = Date.now();
 
-	// Never fails: no meta just means no run has ever finished writing one
+	// Unreadable is NOT the same as "never run": we can't say anything true about the pipeline.
+	// (A missing key is ok: true with value null, so it still falls through to "never run".)
+	if (!metaRead.ok) {
+		return unavailable(request, "status unavailable");
+	}
+	const meta = metaRead.value; // null if no run has ever written one
+
+	// no meta just means no run has ever finished writing one
 	if (!meta) {
 		return json(request,
 			{ dataset: dataset.id, status: "never run", stale: true, cityStale: null },
