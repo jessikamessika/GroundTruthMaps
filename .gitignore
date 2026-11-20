@@ -239,3 +239,4 @@ app/.vite/
 
 # Local files
 claude_food_gtm/
+api/workers/closures-pipeline/Claude outputs/
