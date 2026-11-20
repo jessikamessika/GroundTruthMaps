@@ -338,7 +338,8 @@ function parseNearbyQuery(params) {
 // Turns clean rows into GeoJSON Features. Every endpoint that returns closures
 // calls this, so "active" and the geometry are computed in exactly one place.
 function buildFeatures(clean, nowMs, options = {}) {
-	const { onlyActive = false } = options; // false if the caller didn't say
+	// New: center ({ lat, lon } or null) and radiusKm switch on "nearby" mode
+	const { onlyActive = false, center = null, radiusKm = DEFAULT_RADIUS_KM } = options;
 
 	const features = [];
 	for (const row of clean) {
@@ -347,12 +348,29 @@ function buildFeatures(clean, nowMs, options = {}) {
 		if (onlyActive && !active) continue; // skip this row, go to the next
 		// Destructuring with rest: pull out lon and lat, everything else lands in `props`
 		const { lon, lat, ...props } = row;
+
+		// Built in a variable so nearby mode can add a key before we push
+		const properties = { ...props, active };
+
+		if (center) {
+			// Argument order is lat1, lon1, lat2, lon2 (the center first, then the row)
+			const distanceKm = haversineKm(center.lat, center.lon, lat, lon);
+			if (distanceKm > radiusKm) continue; // outside the circle: skip this row
+			properties.distance_km = Math.round(distanceKm * 1000) / 1000; // 3 decimals
+		}
+
 		features.push({
 			type: "Feature",
 			geometry: { type: "Point", coordinates: [lon, lat] }, // GeoJSON order is lon, lat
-			properties: { ...props, active },
+			properties,
 		});
 	}
+
+	// Nearest first. The compare function returns negative when a is closer, so a goes first.
+	if (center) {
+		features.sort((a, b) => a.properties.distance_km - b.properties.distance_km);
+	}
+
 	return features; // the caller wraps this in a FeatureCollection
 }
 
@@ -376,6 +394,43 @@ async function handleClosures(request, env) {
 		fetched_at: meta?.lastSuccess ?? null,
 		stale: isStale(meta, nowMs),
 		features: buildFeatures(clean, nowMs, { onlyActive }), // { onlyActive } = { onlyActive: onlyActive }
+	}, 200, { "Cache-Control": "public, max-age=60" });
+}
+
+// GET /nearby?lat=..&lon=..&radius_km=..&active=true
+// Closures within radius_km of a point, nearest first, each with distance_km.
+async function handleNearby(request, env) {
+	const url = new URL(request.url);
+
+	// 1. A malformed request is wrong whatever the data state is, so check it first (400)
+	const parsed = parseNearbyQuery(url.searchParams);
+	if (!parsed.ok) {
+		return json(request, { error: parsed.error }, 400, { "Cache-Control": "no-store" });
+	}
+
+	// 2. Fail closed: missing OR unreadable clean data means "we don't know" (503)
+	const dataset = DATASETS[0];
+	const cleanRead = await readKey(env, `${dataset.id}:clean`);
+	if (!cleanRead.ok || !Array.isArray(cleanRead.value)) {
+		return unavailable(request, "clean data unavailable");
+	}
+	const clean = cleanRead.value;
+
+	// 3. Meta is optional: if it's missing or corrupt, isStale() says stale: true
+	const metaRead = await readKey(env, `${dataset.id}:meta`);
+	const meta = metaRead.value;
+
+	const nowMs = Date.now();
+	const onlyActive = url.searchParams.get("active") === "true";
+	const center = { lat: parsed.lat, lon: parsed.lon };
+
+	// An empty features list is fine HERE: we have data, and nothing is inside the radius
+	return json(request, {
+		type: "FeatureCollection",
+		fetched_at: meta?.lastSuccess ?? null,
+		stale: isStale(meta, nowMs),
+		query: { lat: parsed.lat, lon: parsed.lon, radius_km: parsed.radiusKm, active: onlyActive },
+		features: buildFeatures(clean, nowMs, { onlyActive, center, radiusKm: parsed.radiusKm }),
 	}, 200, { "Cache-Control": "public, max-age=60" });
 }
 
@@ -435,6 +490,9 @@ export default {
 		}
 		if (url.pathname === "/status") {
 			return handleStatus(request, env);
+		}
+		if (url.pathname === "/nearby") {
+			return handleNearby(request, env);
 		}
 
 		// Everything else
