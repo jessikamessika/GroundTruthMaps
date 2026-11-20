@@ -237,6 +237,9 @@ app/public/data/.addr-*/
 # Vite cache
 app/.vite/
 
+# "macOS junk" - Claude
+.DS_Store
+
 # Local files
 claude_food_gtm/
 api/workers/closures-pipeline/Claude outputs/
